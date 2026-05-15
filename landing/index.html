@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CompetitorScope — AI 驱动的竞品分析 Agent 协作系统</title>
+    <meta name="description" content="多 Agent 协同完成从信息采集到结构化报告输出的全链路竞品分析。基于 Claude Code 架构与 Harness Engineering 设计。">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-light: #818cf8;
+            --primary-dark: #3730a3;
+            --bg: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --accent: #06b6d4;
+            --success: #10b981;
+            --warning: #f59e0b;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Noto Sans SC', 'Inter', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 100;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 64px;
+        }
+        .logo {
+            font-size: 1.25rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-light), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .nav-links { display: flex; gap: 32px; list-style: none; }
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        .nav-links a:hover { color: var(--text); }
+
+        /* Hero */
+        .hero {
+            padding: 160px 0 100px;
+            text-align: center;
+            background: radial-gradient(ellipse at 50% 0%, rgba(79,70,229,0.15) 0%, transparent 70%);
+        }
+        .badge {
+            display: inline-block;
+            padding: 6px 16px;
+            background: rgba(79,70,229,0.15);
+            border: 1px solid rgba(79,70,229,0.3);
+            border-radius: 100px;
+            font-size: 0.85rem;
+            color: var(--primary-light);
+            margin-bottom: 24px;
+        }
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 800;
+            line-height: 1.15;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #fff 0%, var(--primary-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .hero p {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            max-width: 700px;
+            margin: 0 auto 40px;
+        }
+        .btn-group { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 14px 28px;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: none;
+        }
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
+        .btn-outline {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-outline:hover { background: var(--bg-card); border-color: var(--primary-light); }
+
+        /* Section */
+        section { padding: 100px 0; }
+        .section-title {
+            text-align: center;
+            margin-bottom: 60px;
+        }
+        .section-title h2 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 12px;
+        }
+        .section-title p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+        }
+
+        /* Architecture */
+        .arch-diagram {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px;
+            margin-bottom: 40px;
+            overflow-x: auto;
+        }
+        .arch-diagram pre {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.8;
+        }
+
+        /* Agent Cards */
+        .agent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 24px;
+        }
+        .agent-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 28px;
+            transition: all 0.2s;
+        }
+        .agent-card:hover {
+            border-color: var(--primary-light);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(79,70,229,0.1);
+        }
+        .agent-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 16px;
+        }
+        .agent-card h3 { font-size: 1.1rem; margin-bottom: 8px; }
+        .agent-card p { color: var(--text-muted); font-size: 0.9rem; }
+
+        /* Features */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+        .feature-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+        }
+        .feature-item h3 {
+            font-size: 1rem;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .feature-item p { color: var(--text-muted); font-size: 0.9rem; }
+
+        /* Tech Stack */
+        .tech-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+        .tech-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+        .tech-item .name { font-weight: 600; margin-bottom: 4px; }
+        .tech-item .desc { color: var(--text-muted); font-size: 0.85rem; }
+
+        /* Demo */
+        .demo-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 24px;
+        }
+        .demo-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 28px;
+        }
+        .demo-card h3 { margin-bottom: 8px; }
+        .demo-card p { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px; }
+        .demo-tag {
+            display: inline-block;
+            padding: 4px 12px;
+            background: rgba(6,182,212,0.15);
+            color: var(--accent);
+            border-radius: 100px;
+            font-size: 0.8rem;
+            margin-right: 8px;
+            margin-bottom: 8px;
+        }
+
+        /* Footer */
+        footer {
+            padding: 40px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        footer a { color: var(--primary-light); text-decoration: none; }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2.2rem; }
+            .hero p { font-size: 1rem; }
+            nav .container { padding: 0 16px; }
+            .nav-links { gap: 16px; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="container">
+            <div class="logo">🔍 CompetitorScope</div>
+            <ul class="nav-links">
+                <li><a href="#architecture">架构</a></li>
+                <li><a href="#agents">Agent 角色</a></li>
+                <li><a href="#demo">在线体验</a></li>
+                <li><a href="#features">特性</a></li>
+                <li><a href="report.pdf" download>技术报告 ↓</a></li>
+                <li><a href="https://github.com/bcefghj/competitive-analysis-agent" target="_blank">GitHub</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="container">
+            <div class="badge">🏆 字节 AI 全栈挑战赛 2026</div>
+            <h1>AI 驱动的竞品分析<br>Agent 协作系统</h1>
+            <p>
+                基于 Claude Code 多 Agent 架构与 Harness Engineering 设计模式，
+                6 个专职 Agent 协同完成从公开信息采集到结构化竞品报告输出的全链路自动化分析。
+                DAG 式任务编排 · 交叉审查闭环 · 全程溯源可观测
+            </p>
+            <div class="btn-group">
+                <a href="#demo" class="btn btn-primary">🚀 在线体验 Demo</a>
+                <a href="report.pdf" class="btn btn-outline" download>📄 技术报告 PDF</a>
+                <a href="https://github.com/bcefghj/competitive-analysis-agent" class="btn btn-outline" target="_blank">⭐ GitHub</a>
+            </div>
+        </div>
+    </section>
+
+    <section id="architecture">
+        <div class="container">
+            <div class="section-title">
+                <h2>系统架构</h2>
+                <p>参考 Anthropic 多 Agent 研究系统 + Harness Engineering 五层模型</p>
+            </div>
+            <div class="arch-diagram">
+<pre>
+┌──────────────────────────────────────────────────────────────────┐
+│                    用户界面 (React 19 + TypeScript)                │
+│  ┌─────────────┐ ┌──────────────┐ ┌───────────┐ ┌────────────┐  │
+│  │ 任务创建面板 │ │ DAG 可视化   │ │ Trace 面板│ │ 报告展示   │  │
+│  └─────────────┘ └──────────────┘ └───────────┘ └────────────┘  │
+├──────────────────────────────────────────────────────────────────┤
+│                    API 层 (FastAPI + SSE 流式)                     │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌─────────────┐                                                │
+│   │ Orchestrator │──┬──→ [Collector A] ──┐                       │
+│   │  (Lead Agent)│  │                    │                       │
+│   └─────────────┘  └──→ [Collector B] ──┤                       │
+│                                          ▼                       │
+│                                    [Analyst] ──→ [Writer]        │
+│                                                    │             │
+│                                              [Reviewer] ←──┐    │
+│                                                    │        │    │
+│                                              [Citation] ────┘    │
+│                                                                  │
+├──────────────────────────────────────────────────────────────────┤
+│                  Harness 五层基础设施                              │
+│  L1 Runtime │ L2 Context │ L3 Capability │ L4 Governance │ L5 DAG│
+├──────────────────────────────────────────────────────────────────┤
+│              数据层 (PostgreSQL + Redis + SQLite)                  │
+└──────────────────────────────────────────────────────────────────┘
+</pre>
+            </div>
+        </div>
+    </section>
+
+    <section id="agents" style="background: rgba(30,41,59,0.5);">
+        <div class="container">
+            <div class="section-title">
+                <h2>6 个专职 Agent</h2>
+                <p>模拟真实数字调研小组，每个 Agent 各司其职</p>
+            </div>
+            <div class="agent-grid">
+                <div class="agent-card">
+                    <div class="agent-icon" style="background:rgba(79,70,229,0.2);color:#818cf8;">🎯</div>
+                    <h3>Orchestrator Agent</h3>
+                    <p>任务规划与分解。解析用户需求，识别竞品，生成 DAG 执行计划，协调各 Agent 工作。参考 Claude Code 的 Lead Agent 模式。</p>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-icon" style="background:rgba(6,182,212,0.2);color:#06b6d4;">🔍</div>
+                    <h3>Collector Agent</h3>
+                    <p>信息采集专家。通过 Web 搜索和网页抓取，系统化收集竞品公开信息。支持多实例并行采集不同竞品。</p>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-icon" style="background:rgba(16,185,129,0.2);color:#10b981;">📊</div>
+                    <h3>Analyst Agent</h3>
+                    <p>深度分析引擎。对采集数据进行结构化分析：功能对比矩阵、市场定位、SWOT 分析，输出符合知识 Schema 的结构化结果。</p>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-icon" style="background:rgba(245,158,11,0.2);color:#f59e0b;">✍️</div>
+                    <h3>Writer Agent</h3>
+                    <p>报告撰写专家。将结构化分析转化为专业的竞品分析报告，包含执行摘要、详细对比、战略建议。每条结论标注引用。</p>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-icon" style="background:rgba(239,68,68,0.2);color:#ef4444;">🔎</div>
+                    <h3>Reviewer Agent</h3>
+                    <p>质量审查官。从准确性、完整性、引用质量三个维度评分。未达标则触发交叉审查反馈闭环，要求 Writer/Analyst 修订。</p>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-icon" style="background:rgba(139,92,246,0.2);color:#8b5cf6;">📎</div>
+                    <h3>Citation Agent</h3>
+                    <p>溯源验证专家。验证报告中每条引用的可访问性和相关性，确保结论有据可查。输出引用可靠性评分和验证报告。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="features">
+        <div class="container">
+            <div class="section-title">
+                <h2>核心特性</h2>
+                <p>不仅是分析工具，更是可观测的 Agent 协作平台</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-item">
+                    <h3>📐 DAG 式任务编排</h3>
+                    <p>有向无环图驱动的任务流转，支持并行采集、串行分析、条件分支。参考 Google ADK GraphAgent 设计。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>🔄 交叉审查闭环</h3>
+                    <p>Reviewer Agent 多维评分，未达标自动触发修订循环。最多 2 轮审查，确保报告质量。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>🔗 全程溯源</h3>
+                    <p>每条分析结论标注来源 URL 和原文片段。Citation Agent 独立验证每条引用的有效性和可靠性。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>👁️ 完全可观测</h3>
+                    <p>Agent 决策日志实时追踪，SSE 流式推送执行状态。每一步推理过程和工具调用完全透明。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>🔧 Harness 五层架构</h3>
+                    <p>Runtime 状态机 + Context 记忆管理 + Capability 工具注册 + Governance 权限审计 + Surface DAG 编排。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>⚙️ 棘轮机制</h3>
+                    <p>Agent 运行时错误自动转化为永久约束规则，防止重复犯错。参考 Claude Code 的 Ratchet 设计。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="demo" style="background: rgba(30,41,59,0.5);">
+        <div class="container">
+            <div class="section-title">
+                <h2>在线体验</h2>
+                <p>三个预置场景，直接关联字节业务</p>
+            </div>
+            <div class="demo-cards">
+                <div class="demo-card">
+                    <h3>🤖 AI 对话助手竞品分析</h3>
+                    <p>豆包 vs Kimi vs DeepSeek vs 通义千问 — 分析中国 AI 对话助手市场竞争格局</p>
+                    <div>
+                        <span class="demo-tag">字节核心业务</span>
+                        <span class="demo-tag">豆包</span>
+                        <span class="demo-tag">月活对比</span>
+                    </div>
+                </div>
+                <div class="demo-card">
+                    <h3>📱 短视频平台竞品分析</h3>
+                    <p>抖音 vs 快手 vs 小红书 vs B站 — 内容生态、商业化模式与 AI 技术应用差异</p>
+                    <div>
+                        <span class="demo-tag">抖音</span>
+                        <span class="demo-tag">内容生态</span>
+                        <span class="demo-tag">AI 应用</span>
+                    </div>
+                </div>
+                <div class="demo-card">
+                    <h3>💻 AI 编程工具竞品分析</h3>
+                    <p>Cursor vs GitHub Copilot vs TRAE vs Windsurf — AI 编程辅助工具全方位对比</p>
+                    <div>
+                        <span class="demo-tag">TRAE 赞助商</span>
+                        <span class="demo-tag">Agent 模式</span>
+                        <span class="demo-tag">代码补全</span>
+                    </div>
+                </div>
+            </div>
+            <div style="text-align:center; margin-top:40px;">
+                <a href="/app" class="btn btn-primary">🚀 立即体验完整 Demo</a>
+            </div>
+        </div>
+    </section>
+
+    <section id="tech">
+        <div class="container">
+            <div class="section-title">
+                <h2>技术栈</h2>
+                <p>每一项选择都有标杆依据</p>
+            </div>
+            <div class="tech-grid">
+                <div class="tech-item">
+                    <div class="name">MiniMax M2.7</div>
+                    <div class="desc">大语言模型驱动</div>
+                </div>
+                <div class="tech-item">
+                    <div class="name">Python + FastAPI</div>
+                    <div class="desc">后端 API + SSE 流式</div>
+                </div>
+                <div class="tech-item">
+                    <div class="name">React 19 + TypeScript</div>
+                    <div class="desc">前端界面</div>
+                </div>
+                <div class="tech-item">
+                    <div class="name">React Flow</div>
+                    <div class="desc">DAG 可视化</div>
+                </div>
+                <div class="tech-item">
+                    <div class="name">Pydantic v2</div>
+                    <div class="desc">知识 Schema 类型安全</div>
+                </div>
+                <div class="tech-item">
+                    <div class="name">OpenTelemetry</div>
+                    <div class="desc">可观测性追踪</div>
+                </div>
+                <div class="tech-item">
+                    <div class="name">Docker Compose</div>
+                    <div class="desc">一键部署</div>
+                </div>
+                <div class="tech-item">
+                    <div class="name">Anthropic SDK</div>
+                    <div class="desc">MiniMax 兼容接口</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="references" style="background: rgba(30,41,59,0.5);">
+        <div class="container">
+            <div class="section-title">
+                <h2>架构参考</h2>
+                <p>每一个设计决策都有据可查</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-item">
+                    <h3>📖 Anthropic 多 Agent 研究系统</h3>
+                    <p>Orchestrator-Worker 模式，Lead Agent 协调 + Subagent 并行执行。90.2% 优于单 Agent 系统。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>🏗️ Claude Code 架构</h3>
+                    <p>Lead Agent + Specialist Agents + Shared Task System。从单 Agent 进化到协调多 Agent。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>⚡ Harness Engineering</h3>
+                    <p>Agent = Model + Harness。五层模型：Runtime、Context、Capability、Governance、Surface。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>📊 Google ADK GraphAgent</h3>
+                    <p>DAG 有向图编排，节点生命周期回调，OpenTelemetry 追踪支持。19K+ GitHub Stars。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>💹 TradingAgents</h3>
+                    <p>61K Stars 的多 Agent 金融分析框架。结构化输出 + 决策日志 + 多模型支持。</p>
+                </div>
+                <div class="feature-item">
+                    <h3>🏆 gibbsAlpha</h3>
+                    <p>Hackathon 获奖多 Agent 分析系统。严格 Schema + Reflection Loop + 实时数据集成。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>
+                <strong>CompetitorScope</strong> — AI 驱动的竞品分析 Agent 协作系统<br>
+                字节 AI 全栈挑战赛 2026 · Powered by MiniMax M2.7<br>
+                <a href="https://github.com/bcefghj/competitive-analysis-agent" target="_blank">GitHub</a> ·
+                <a href="report.pdf" download>技术报告</a> ·
+                <a href="/app">在线 Demo</a>
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
