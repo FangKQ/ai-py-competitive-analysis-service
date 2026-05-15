@@ -194,6 +194,47 @@ async def list_tasks():
     }
 
 
+@router.get("/demos")
+async def get_demos():
+    """获取预置 Demo 场景列表"""
+    from examples import DEMO_SCENARIOS
+
+    return {
+        "demos": [
+            {
+                "id": d["id"],
+                "name": d["name"],
+                "query": d["query"],
+                "competitors": d["competitors"],
+                "industry": d["industry"],
+                "focus_areas": d["focus_areas"],
+                "description": d["description"],
+                "has_cached_report": "cached_report" in d,
+            }
+            for d in DEMO_SCENARIOS
+        ]
+    }
+
+
+@router.get("/demos/{demo_id}")
+async def get_demo_report(demo_id: str):
+    """获取 Demo 缓存报告"""
+    from examples import DEMO_SCENARIOS
+
+    for d in DEMO_SCENARIOS:
+        if d["id"] == demo_id:
+            return {
+                "scenario": {
+                    "id": d["id"],
+                    "name": d["name"],
+                    "query": d["query"],
+                    "competitors": d["competitors"],
+                },
+                "cached_report": d.get("cached_report"),
+            }
+    raise HTTPException(status_code=404, detail="Demo not found")
+
+
 @router.get("/engine/status")
 async def get_engine_status():
     """获取引擎状态"""
