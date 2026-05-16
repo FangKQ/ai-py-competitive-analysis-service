@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Demo · CompetitorLens 竞品分析 Agent 协作系统</title>
+<meta name="description" content="在线体验 6 个 AI Agent 协作完成竞品分析的全流程。三个预跑场景秒开报告，支持自定义分析。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="demo.css">
+</head>
+<body>
+
+<!-- ====== Top Nav ====== -->
+<nav class="demo-nav">
+  <div class="nav-inner">
+    <a href="/" class="nav-logo">
+      <span class="nav-dot"></span>
+      <span>CompetitorLens</span>
+      <span class="nav-sep">·</span>
+      <span class="nav-label">Demo</span>
+    </a>
+    <div class="nav-tabs" id="navTabs">
+      <button class="nav-tab active" data-id="ai-assistant">
+        <span class="tab-icon">🤖</span> AI 对话助手
+      </button>
+      <button class="nav-tab" data-id="short-video">
+        <span class="tab-icon">📱</span> 短视频平台
+      </button>
+      <button class="nav-tab" data-id="ai-coding">
+        <span class="tab-icon">💻</span> AI 编程工具
+      </button>
+      <button class="nav-tab tab-custom" data-id="custom">
+        <span class="tab-icon">✨</span> 自定义分析
+      </button>
+    </div>
+    <div class="nav-actions">
+      <a href="/" class="nav-back">← 返回介绍页</a>
+      <button class="theme-btn" id="themeToggle" aria-label="Toggle theme">☾</button>
+    </div>
+  </div>
+</nav>
+
+<!-- ====== Main Content ====== -->
+<main class="demo-main">
+  <!-- Left Panel: Agent Timeline -->
+  <aside class="panel-left" id="panelLeft">
+    <div class="panel-header">
+      <h3>Agent 协作时间线</h3>
+      <div class="panel-badge" id="statusBadge">READY</div>
+    </div>
+    <div class="timeline-wrap" id="timelineWrap">
+      <div class="timeline-placeholder">
+        <div class="tp-icon">🎯</div>
+        <p>选择场景查看 Agent 协作过程</p>
+      </div>
+    </div>
+    <div class="panel-stats" id="panelStats"></div>
+  </aside>
+
+  <!-- Right Panel: Report -->
+  <section class="panel-right" id="panelRight">
+    <!-- Scenario Info Bar -->
+    <div class="scenario-bar" id="scenarioBar">
+      <div class="sb-info">
+        <h2 id="scenarioTitle">选择分析场景</h2>
+        <p id="scenarioQuery">点击上方 Tab 选择预跑场景或输入自定义需求</p>
+      </div>
+      <div class="sb-tags" id="scenarioTags"></div>
+    </div>
+
+    <!-- Custom Input (only for custom tab) -->
+    <div class="custom-input-area" id="customArea" style="display:none">
+      <div class="custom-row">
+        <input type="text" id="customInput" placeholder="输入竞品分析需求，例如：分析中国新能源汽车市场竞争格局" />
+        <button class="btn-run" id="customRun">
+          <span class="btn-text">开始分析</span>
+          <span class="btn-spinner" style="display:none"></span>
+        </button>
+      </div>
+      <div class="custom-hint">
+        系统将调用 MiniMax M2.7 大模型，由 6 个 AI Agent 实时协作生成报告。如 API 不可用将自动 fallback 到演示数据。
+      </div>
+    </div>
+
+    <!-- Report Content -->
+    <div class="report-area" id="reportArea">
+      <div class="report-placeholder" id="reportPlaceholder">
+        <div class="rp-visual">
+          <div class="rp-circle c1"></div>
+          <div class="rp-circle c2"></div>
+          <div class="rp-circle c3"></div>
+          <div class="rp-icon">📊</div>
+        </div>
+        <h3>选择分析场景</h3>
+        <p>点击上方任意场景 Tab，即可查看预跑的完整竞品分析报告</p>
+        <div class="rp-features">
+          <span>📝 完整 Markdown 报告</span>
+          <span>📊 功能对比矩阵</span>
+          <span>🔍 SWOT 分析</span>
+          <span>📌 数据溯源</span>
+        </div>
+      </div>
+      <div class="report-content" id="reportContent" style="display:none"></div>
+    </div>
+  </section>
+</main>
+
+<!-- ====== Trace Panel (Collapsible) ====== -->
+<div class="trace-panel" id="tracePanel">
+  <button class="trace-toggle" id="traceToggle">
+    <span>🔬 Agent 决策追踪 Trace</span>
+    <span class="trace-arrow" id="traceArrow">▲</span>
+  </button>
+  <div class="trace-body" id="traceBody">
+    <div class="trace-list" id="traceList"></div>
+  </div>
+</div>
+
+<script src="demo.js"></script>
+</body>
+</html>

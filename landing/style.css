@@ -613,3 +613,52 @@ em { font-style: normal; color: var(--accent); }
 /* ====== Typewriter ====== */
 .typewriter { border-right: 2px solid var(--accent); animation: blink-caret .75s step-end infinite; }
 @keyframes blink-caret { from, to { border-color: transparent; } 50% { border-color: var(--accent); } }
+
+/* ====== Demo Cards (landing page -> demo.html links) ====== */
+.demo-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.demo-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  transition: all .25s ease;
+  text-decoration: none;
+  color: inherit;
+}
+.demo-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(51,112,255,.08);
+}
+.demo-card .dc-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+  width: 48px;
+  text-align: center;
+}
+.demo-card .dc-body { flex: 1; min-width: 0; }
+.demo-card .dc-body h3 { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
+.demo-card .dc-body p { font-size: .85rem; color: var(--fg2); margin-bottom: 8px; }
+.demo-card .dc-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.demo-card .dc-tag {
+  font-size: .7rem; font-weight: 600;
+  padding: 3px 8px; border-radius: 4px;
+  background: var(--accent-soft); color: var(--accent);
+}
+.demo-card .dc-arrow {
+  font-size: 1.2rem;
+  color: var(--fg3);
+  flex-shrink: 0;
+  transition: transform .2s, color .2s;
+}
+.demo-card:hover .dc-arrow {
+  transform: translateX(4px);
+  color: var(--accent);
+}

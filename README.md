@@ -11,7 +11,7 @@
 [![MiniMax M2.7](https://img.shields.io/badge/Model-MiniMax_M2.7-FF6B35.svg)](https://platform.minimax.io)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com)
 
-[🌐 在线 Demo](http://101.37.125.37) · [📄 技术报告 PDF](http://101.37.125.37/report.pdf) · [📡 API 文档](http://101.37.125.37/docs)
+[🌐 项目介绍](http://101.37.125.37) · [🔍 在线 Demo](http://101.37.125.37/demo.html) · [📄 技术报告 PDF](http://101.37.125.37/report.pdf) · [📡 API 文档](http://101.37.125.37/docs)
 
 </div>
 
@@ -153,13 +153,15 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ## 📊 Demo 场景
 
-三个场景均与字节业务直接关联：
+三个场景均与字节业务直接关联，均有**预跑的完整分析报告**，点击即开：
 
-| 场景 | 竞品 | 字节关联 |
-|------|------|---------|
-| 🤖 **AI 对话助手** | 豆包 vs Kimi vs DeepSeek vs 通义千问 | 字节核心 AI 产品 |
-| 📱 **短视频平台** | 抖音 vs 快手 vs 小红书 vs B站 | 字节核心业务 |
-| 💻 **AI 编程工具** | Cursor vs Copilot vs TRAE vs Windsurf | 比赛赞助商 TRAE |
+| 场景 | 竞品 | 字节关联 | Demo 链接 |
+|------|------|---------|----------|
+| 🤖 **AI 对话助手** | 豆包 vs Kimi vs DeepSeek vs 通义千问 | 字节核心 AI 产品 | [查看报告](http://101.37.125.37/demo.html#ai-assistant) |
+| 📱 **短视频平台** | 抖音 vs 快手 vs 小红书 vs B站 | 字节核心业务 | [查看报告](http://101.37.125.37/demo.html#short-video) |
+| 💻 **AI 编程工具** | Cursor vs Copilot vs TRAE vs Windsurf | 比赛赞助商 TRAE | [查看报告](http://101.37.125.37/demo.html#ai-coding) |
+
+**评委在线使用**：也可点击 [自定义分析](http://101.37.125.37/demo.html#custom) 输入任意竞品分析需求，系统将调用 MiniMax M2.7 实时分析。
 
 ---
 
@@ -200,9 +202,12 @@ competitive-analysis-agent/
 │   ├── main.py             # FastAPI 入口
 │   └── requirements.txt    # Python 依赖
 ├── landing/                # 项目介绍 + Demo 交互页
-│   ├── index.html          # 12 章节叙事弧
-│   ├── style.css           # 双主题 + 动画
-│   └── app.js              # Agent 模拟器 + Live Demo
+│   ├── index.html          # 12 章节叙事弧（介绍页）
+│   ├── demo.html           # 独立 Demo 体验页（双面板）
+│   ├── style.css           # 介绍页样式（双主题 + 动画）
+│   ├── demo.css            # Demo 页样式（Agent 时间线 + 报告渲染）
+│   ├── app.js              # 介绍页 JS（Agent 模拟器）
+│   └── demo.js             # Demo 页 JS（Markdown 渲染器 + 实时分析）
 ├── docs/report/            # LaTeX 技术报告
 │   └── main.tex            # 50+ 页技术文档
 ├── examples/               # 预置 Demo 场景数据

@@ -2770,7 +2770,7 @@ EventSource & SSE接收 & 原生API，接收Agent实时执行状态 \\
 \item \textbf{Hero + Agent协作模拟器}——3秒抓住评委：动画演示6 Agent协作流程
 \item \textbf{三大痛点}——传统竞品分析的痛（信息散/流程繁/无溯源）
 \item \textbf{6 Agent角色卡片}——每个Agent入场动画，展示职责和工具
-\item \textbf{Live Demo}——输入分析需求→调后端API→SSE接收→实时渲染报告
+\item \textbf{Live Demo}——三个场景卡片+「进入完整Demo体验页」按钮，链接到独立的\texttt{demo.html}
 \item \textbf{Agent Trace展示}——决策日志时间线，可视化每步推理
 \item \textbf{Harness五层架构}——回答"不是套壳"，展示工程深度
 \item \textbf{Demo场景卡片}——三个字节相关场景一键启动
@@ -2792,18 +2792,25 @@ Hero区域的Agent协作模拟器是页面的核心交互亮点，灵感来自IM
 \item 自动滚动到最新消息
 \end{itemize}
 
-\section{Live Demo交互设计}
+\section{双页面架构与Demo交互设计}
 
-Live Demo区域实现了完整的"输入→执行→展示"交互流程：
+系统采用\textbf{介绍页+独立Demo体验页}的双页面架构（类似优秀Hackathon项目的Landing Page→Interactive Demo模式）：
+
+\begin{itemize}
+\item \textbf{介绍页}（\texttt{index.html}）——12章节叙事弧，从痛点到解决方案，包含Agent协作模拟器
+\item \textbf{Demo体验页}（\texttt{demo.html}）——独立的交互式Demo，双面板布局：
+  \begin{itemize}
+  \item 左面板（40\%）：Agent协作时间线，逐步动画展示每个Agent的推理过程、工具调用和Token消耗
+  \item 右面板（60\%）：完整Markdown报告渲染区，支持表格、有序列表、引用块等完整语法
+  \item 底部：Agent决策追踪Trace折叠面板，展示每步的详细推理链
+  \end{itemize}
+\end{itemize}
+
+Demo页提供两种交互模式：
 
 \begin{enumerate}
-\item 用户选择预设场景按钮或输入自定义分析需求
-\item 点击"开始分析"后，调用后端\texttt{POST /api/tasks}创建任务
-\item 通过轮询\texttt{GET /api/tasks/\{id\}}获取执行状态
-\item 实时展示执行事件（任务创建、状态更新等）
-\item 任务完成后渲染Markdown格式的完整报告
-\item 报告下方显示统计信息（Token消耗、耗时、竞品数、引用数）
-\item 当API调用失败时，自动Fallback到预设的高质量Demo数据
+\item \textbf{预跑场景（零等待）}：三个场景（AI对话助手/短视频平台/AI编程工具）均有预跑的高质量分析报告，点击Tab即可秒开完整报告，无需等待API调用
+\item \textbf{自定义分析（实时）}：评委可输入任意竞品分析需求，系统调用MiniMax M2.7大模型，由6个Agent实时协作生成报告。通过SSE实时推送执行事件，API不可用时自动Fallback到预设Demo数据
 \end{enumerate}
 
 \section{SSE实时状态更新机制}
@@ -2856,9 +2863,10 @@ CPU/内存 & 2核vCPU / 4GiB \\
 \end{tabular}
 \end{table}
 
-Nginx配置实现三级路由：
+Nginx配置实现四级路由：
 \begin{itemize}
 \item \texttt{/} — 项目介绍Landing Page（静态HTML）
+\item \texttt{/demo.html} — 独立Demo体验页（双面板Agent时间线+报告渲染）
 \item \texttt{/api/} — 后端FastAPI服务（反向代理到8000端口）
 \item \texttt{/docs} — FastAPI自动生成的Swagger API文档
 \end{itemize}

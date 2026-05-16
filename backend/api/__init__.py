@@ -319,19 +319,24 @@ async def get_demos():
 
 @router.get("/demos/{demo_id}")
 async def get_demo_report(demo_id: str):
-    """获取 Demo 缓存报告"""
+    """获取 Demo 缓存报告（含 markdown_report 和 trace_data）"""
     from examples import DEMO_SCENARIOS
 
     for d in DEMO_SCENARIOS:
         if d["id"] == demo_id:
+            cached = d.get("cached_report", {})
             return {
                 "scenario": {
                     "id": d["id"],
                     "name": d["name"],
                     "query": d["query"],
                     "competitors": d["competitors"],
+                    "industry": d.get("industry", ""),
+                    "focus_areas": d.get("focus_areas", []),
                 },
-                "cached_report": d.get("cached_report"),
+                "cached_report": cached,
+                "markdown_report": cached.get("markdown_report", ""),
+                "trace_data": cached.get("trace_data", []),
             }
     raise HTTPException(status_code=404, detail="Demo not found")
 

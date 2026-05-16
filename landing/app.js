@@ -119,7 +119,7 @@ const RESOURCES = [
   { icon: '📄', name: '技术报告 PDF', desc: '92 页 LaTeX 技术文档', url: '/report.pdf' },
   { icon: '💻', name: 'GitHub 仓库', desc: '完整源代码 + README', url: 'https://github.com/bcefghj/competitive-analysis-agent' },
   { icon: '📡', name: 'API 文档', desc: 'Swagger / OpenAPI', url: '/api/docs' },
-  { icon: '🔍', name: '在线 Demo', desc: '实时体验 Agent 协作', url: '#demo' },
+  { icon: '🔍', name: '在线 Demo', desc: '完整体验 Agent 协作', url: '/demo.html' },
 ];
 
 /* ====== Agent Simulator ====== */
@@ -242,7 +242,7 @@ const RESOURCES = [
 (() => {
   const container = document.getElementById('scenarioCards');
   SCENARIOS.forEach(s => {
-    container.appendChild(h('div', { class: 'scenario-card reveal', onClick: () => { startDemo(s.query, s.id); } }, [
+    container.appendChild(h('a', { class: 'scenario-card reveal', href: `/demo.html#${s.id}` }, [
       h('div', { class: 'sc-icon' }, s.icon),
       h('h3', {}, s.name),
       h('p', {}, s.desc),
@@ -318,17 +318,26 @@ const RESOURCES = [
   });
 })();
 
-/* ====== Demo Scenario Buttons ====== */
+/* ====== Demo Scenario Cards (links to demo.html) ====== */
 (() => {
-  const container = document.getElementById('demoScenarios');
-  const input = document.getElementById('demoInput');
+  const container = document.getElementById('demoCards');
+  if (!container) return;
   SCENARIOS.forEach(s => {
-    const btn = h('button', { class: 'demo-scenario-btn', onClick: () => {
-      document.querySelectorAll('.demo-scenario-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      input.value = s.query;
-    }}, s.name);
-    container.appendChild(btn);
+    const card = h('a', { class: 'demo-card reveal', href: `/demo.html#${s.id}` }, [
+      h('div', { class: 'dc-icon' }, s.icon),
+      h('div', { class: 'dc-body' }, [
+        h('h3', {}, s.name),
+        h('p', {}, s.desc),
+        h('div', { class: 'dc-tags' }, s.tags.map(t => h('span', { class: 'dc-tag' }, t))),
+      ]),
+      h('div', { class: 'dc-arrow' }, '→'),
+    ]);
+    container.appendChild(card);
+  });
+  document.querySelectorAll('.demo-cards .reveal').forEach(el => {
+    new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); } });
+    }, { threshold: 0.1 }).observe(el);
   });
 })();
 
@@ -362,199 +371,4 @@ const RESOURCES = [
   });
 })();
 
-/* ====== Live Demo ====== */
-let demoRunning = false;
-
-function startDemo(query, demoId) {
-  if (demoRunning) return;
-
-  const input = document.getElementById('demoInput');
-  const output = document.getElementById('demoOutput');
-  const runBtn = document.getElementById('demoRun');
-
-  query = query || input.value.trim();
-  if (!query) { input.focus(); return; }
-
-  demoRunning = true;
-  runBtn.disabled = true;
-  runBtn.innerHTML = '<span class="spinner"></span> 分析中...';
-  output.innerHTML = '';
-
-  const addEvent = (icon, text, color) => {
-    output.appendChild(h('div', { class: 'demo-event' }, [
-      h('div', { class: 'ev-icon', style: { background: (color || 'var(--accent)') + '18' } }, icon),
-      h('div', { class: 'ev-text' }, text),
-      h('div', { class: 'ev-time' }, new Date().toLocaleTimeString()),
-    ]));
-    output.scrollTop = output.scrollHeight;
-  };
-
-  addEvent('🚀', `创建分析任务：${query}`, '#3370FF');
-
-  fetch(`${API_BASE}/api/tasks`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, use_demo: demoId || 'ai-assistant' }),
-  })
-    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-    .then(data => {
-      addEvent('✅', `任务已创建：${data.task_id}`, '#10B981');
-      pollTask(data.task_id, output, addEvent, runBtn);
-    })
-    .catch(err => {
-      addEvent('⚠️', `API 调用失败：${err.message}`, '#EF4444');
-      addEvent('📋', '使用预设 Demo 数据展示...', '#F59E0B');
-      showDemoFallback(output, query);
-      finishDemo(runBtn);
-    });
-}
-
-function pollTask(taskId, output, addEvent, runBtn) {
-  let attempts = 0;
-  const maxAttempts = 60;
-
-  const poll = () => {
-    attempts++;
-    if (attempts > maxAttempts) {
-      addEvent('⏱', '等待超时，使用缓存数据', '#F59E0B');
-      showDemoFallback(output, '');
-      finishDemo(runBtn);
-      return;
-    }
-
-    fetch(`${API_BASE}/api/tasks/${taskId}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.status === 'completed' && data.report) {
-          addEvent('📊', '报告生成完成！', '#10B981');
-          renderReport(output, data.report);
-          finishDemo(runBtn);
-        } else if (data.status === 'failed') {
-          addEvent('❌', '任务失败，使用 Demo 数据', '#EF4444');
-          showDemoFallback(output, data.query);
-          finishDemo(runBtn);
-        } else {
-          addEvent('⏳', `状态: ${data.status}...`, '#F59E0B');
-          setTimeout(poll, 2000);
-        }
-      })
-      .catch(() => {
-        showDemoFallback(output, '');
-        finishDemo(runBtn);
-      });
-  };
-
-  setTimeout(poll, 1500);
-}
-
-function renderReport(output, report) {
-  const reportEl = h('div', { class: 'demo-report' }, [
-    h('h3', {}, report.title || '竞品分析报告'),
-  ]);
-
-  const mdContent = h('div', { class: 'md-content' });
-  const markdown = report.markdown_report || report.executive_summary || '';
-  mdContent.innerHTML = simpleMarkdown(markdown);
-  reportEl.appendChild(mdContent);
-
-  const stats = h('div', { class: 'demo-stats' }, [
-    h('div', { class: 'stat' }, [h('div', { class: 'stat-label' }, 'Tokens'), h('div', { class: 'stat-value' }, (report.total_tokens_used || 0).toLocaleString())]),
-    h('div', { class: 'stat' }, [h('div', { class: 'stat-label' }, '耗时'), h('div', { class: 'stat-value' }, `${((report.total_duration_ms || 0) / 1000).toFixed(1)}s`)]),
-    h('div', { class: 'stat' }, [h('div', { class: 'stat-label' }, '竞品数'), h('div', { class: 'stat-value' }, `${(report.competitors || []).length}`)]),
-    h('div', { class: 'stat' }, [h('div', { class: 'stat-label' }, '引用数'), h('div', { class: 'stat-value' }, `${report.citations_count || 0}`)]),
-  ]);
-  reportEl.appendChild(stats);
-  output.appendChild(reportEl);
-  output.scrollTop = output.scrollHeight;
-}
-
-function showDemoFallback(output, query) {
-  renderReport(output, {
-    title: 'AI 对话助手竞品分析',
-    executive_summary: '在中国 AI 对话助手市场，豆包凭借字节跳动生态优势月活达 2.27 亿领跑市场，Kimi 以 200 万字超长上下文差异化竞争，DeepSeek 以开源策略快速崛起，通义千问依托阿里云企业生态。',
-    markdown_report: `# AI 对话助手竞品分析
-
-## 执行摘要
-
-在中国 AI 对话助手市场，豆包（Doubao）凭借字节跳动的生态优势，截至 2025 年 Q4 月活用户达 2.27 亿，稳居市场第一。
-
-## 竞品概览
-
-### 豆包 (Doubao)
-**定位**: 市场领导者
-字节跳动旗下 AI 对话助手，与抖音/飞书深度集成。
-- 日活超 1 亿
-- 多模态理解与生成
-- AI 伴侣/智能体生态
-
-### Kimi
-**定位**: 强势挑战者
-200 万字超长上下文窗口，深度阅读与学术分析。
-
-### DeepSeek
-**定位**: 快速崛起者
-开源模型策略，强代码能力，高性价比 API。
-
-### 通义千问
-**定位**: 生态依托者
-阿里云企业生态，开源 Qwen 系列。
-
-## 功能对比
-
-| 功能 | 豆包 | Kimi | DeepSeek | 通义千问 |
-| --- | --- | --- | --- | --- |
-| 月活用户 | 2.27 亿 (领先) | 约 3600 万 | 约 2000 万 | 约 1500 万 |
-| 上下文窗口 | 128K tokens | 200 万字 (领先) | 128K tokens | 128K tokens |
-| 多模态 | 文本+图片+语音 | 文本+图片 | 文本+图片+代码 | 文本+图片+语音+视频 |
-| 生态整合 | 抖音+飞书+即梦 (领先) | 独立应用 | 开源社区 | 阿里云+淘宝 |
-
-## 战略建议
-
-1. 豆包应继续深化字节生态整合优势
-2. 关注 DeepSeek 开源策略对市场格局的影响
-3. 长文本场景是 Kimi 的核心壁垒`,
-    total_tokens_used: 35600,
-    total_duration_ms: 9500,
-    competitors: [{}, {}, {}, {}],
-    citations_count: 5,
-  });
-}
-
-function finishDemo(runBtn) {
-  demoRunning = false;
-  runBtn.disabled = false;
-  runBtn.innerHTML = '开始分析';
-}
-
-function simpleMarkdown(md) {
-  if (!md) return '';
-  return md
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^\- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
-    .replace(/\n\| (.+)/g, (match) => {
-      const rows = match.trim().split('\n').filter(r => r.startsWith('|'));
-      if (rows.length < 2) return match;
-      const parseRow = r => r.split('|').filter(c => c.trim()).map(c => c.trim());
-      const headers = parseRow(rows[0]);
-      const dataRows = rows.slice(2);
-      let table = '<table><thead><tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr></thead><tbody>';
-      dataRows.forEach(r => {
-        const cells = parseRow(r);
-        table += '<tr>' + cells.map(c => `<td>${c}</td>`).join('') + '</tr>';
-      });
-      table += '</tbody></table>';
-      return table;
-    })
-    .replace(/\n{2,}/g, '<br><br>')
-    .replace(/\n/g, '<br>');
-}
-
-/* ====== Demo Button Event ====== */
-document.getElementById('demoRun').addEventListener('click', () => startDemo());
-
-/* ====== Smooth anchor scroll for scenario cards ====== */
-window.startDemo = startDemo;
+/* ====== Demo Button (removed - demo is now in demo.html) ====== */
