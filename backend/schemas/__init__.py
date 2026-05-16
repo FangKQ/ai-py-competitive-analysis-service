@@ -152,6 +152,7 @@ class CompetitiveReport(BaseModel):
     agent_traces: list[AgentDecisionLog] = Field(default_factory=list)
     review_history: list[ReviewFeedback] = Field(default_factory=list)
 
+    markdown_report: str = Field(default="", description="Markdown 格式的完整报告正文")
     total_tokens_used: int = 0
     total_duration_ms: int = 0
 
@@ -184,6 +185,7 @@ class AnalysisTask(BaseModel):
     industry: str = ""
     focus_areas: list[str] = Field(default_factory=list)
     status: TaskStatus = TaskStatus.PENDING
+    error_message: str = ""
     dag_plan: Optional[DAGPlan] = None
     report: Optional[CompetitiveReport] = None
     created_at: datetime = Field(default_factory=datetime.now)

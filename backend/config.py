@@ -25,7 +25,8 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", env="LOG_LEVEL")
     cors_origins: str = Field(
-        default="http://localhost:3000,http://localhost:5173", env="CORS_ORIGINS"
+        default="http://localhost:3000,http://localhost:5173,http://101.37.125.37,http://101.37.125.37:8000",
+        env="CORS_ORIGINS",
     )
 
     max_tokens_per_agent: int = Field(default=8192)
