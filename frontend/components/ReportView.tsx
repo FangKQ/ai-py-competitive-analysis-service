@@ -7,14 +7,15 @@ import { FileText, Download, ExternalLink, Copy, Check } from "lucide-react";
 
 interface ReportViewProps {
   content: string | null;
+  taskId?: string | null;
 }
 
-export default function ReportView({ content }: ReportViewProps) {
+export default function ReportView({ content, taskId }: ReportViewProps) {
   const [copiedFootnote, setCopiedFootnote] = useState<string | null>(null);
 
   if (!content) {
     return (
-      <div className="h-full flex items-center justify-center">
+      <div className="flex items-center justify-center py-12">
         <div className="text-center">
           <FileText className="w-12 h-12 text-surface-600 mx-auto mb-3" />
           <p className="text-surface-400 font-medium">报告生成中...</p>
@@ -30,8 +31,14 @@ export default function ReportView({ content }: ReportViewProps) {
     await navigator.clipboard.writeText(content);
   };
 
+  const handleExportPDF = () => {
+    if (!taskId) return;
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    window.open(`${apiBase}/api/tasks/${taskId}/export/pdf`, "_blank");
+  };
+
   return (
-    <div className="h-full overflow-y-auto scrollbar-thin">
+    <div className="scrollbar-thin">
       <div className="max-w-4xl mx-auto p-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-2">
@@ -46,7 +53,11 @@ export default function ReportView({ content }: ReportViewProps) {
               <Copy className="w-3.5 h-3.5" />
               复制
             </button>
-            <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-surface-300 bg-surface-800 hover:bg-surface-700 border border-surface-700 rounded-lg transition-colors">
+            <button
+              onClick={handleExportPDF}
+              disabled={!taskId}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-surface-300 bg-surface-800 hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed border border-surface-700 rounded-lg transition-colors"
+            >
               <Download className="w-3.5 h-3.5" />
               导出 PDF
             </button>

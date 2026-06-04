@@ -3,9 +3,7 @@
  * Tab 切换 / Agent 时间线动画 / 报告渲染 / Markdown 渲染器 / 自定义分析
  * ========================================================================== */
 
-const API_BASE = location.hostname === 'localhost'
-  ? 'http://localhost:8000'
-  : `${location.protocol}//${location.hostname}`;
+const API_BASE = `${location.protocol}//${location.host}`;
 
 const AGENT_COLORS = {
   Orchestrator: { color: '#3370FF', icon: '🎯' },
@@ -462,6 +460,35 @@ async function pollCustomTask(taskId, eventsDiv, addEvent) {
           </div>
         `;
         $('reportContent').insertAdjacentHTML('beforeend', statsHtml);
+
+        // Fetch and render traces for timeline and trace panel
+        try {
+          const traceResp = await fetch(`${API_BASE}/api/tasks/${taskId}/traces`);
+          const traceData = await traceResp.json();
+          const traces = (traceData.traces || []).map(t => {
+            const roleMap = { orchestrator: 'Orchestrator', collector: 'Collector', analyst: 'Analyst', writer: 'Writer', reviewer: 'Reviewer', citation: 'Citation' };
+            return {
+              agent: roleMap[t.agent_role] || t.agent_role,
+              action: t.action,
+              reasoning: t.reasoning || '',
+              tokens: (t.input_tokens || 0) + (t.output_tokens || 0),
+              duration: t.duration_ms ? `${(t.duration_ms / 1000).toFixed(1)}s` : '-',
+            };
+          });
+          renderTimeline(traces);
+          renderTrace(traces);
+
+          const totalTokens = traces.reduce((sum, t) => sum + (t.tokens || 0), 0);
+          const totalTime = traces.reduce((sum, t) => sum + parseFloat(t.duration || '0'), 0);
+          $('panelStats').innerHTML = `
+            <div class="ps-item"><span class="ps-label">Total Tokens</span><span class="ps-value">${totalTokens.toLocaleString()}</span></div>
+            <div class="ps-item"><span class="ps-label">Total Time</span><span class="ps-value">${totalTime.toFixed(1)}s</span></div>
+            <div class="ps-item"><span class="ps-label">Agents</span><span class="ps-value">6</span></div>
+          `;
+        } catch (e) {
+          console.warn('Failed to fetch traces:', e);
+        }
+
         $('statusBadge').textContent = 'DONE';
         $('statusBadge').className = 'panel-badge done';
         return;

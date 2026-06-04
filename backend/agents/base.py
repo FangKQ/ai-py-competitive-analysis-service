@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 from harness.runtime import AgentRuntime
 from harness.context import SharedMemory
@@ -30,12 +30,13 @@ class BaseAgent:
         self,
         role: AgentRole,
         system_prompt: str,
-        client: AsyncAnthropic,
-        model: str = "MiniMax-M2.7",
+        client: AsyncOpenAI,
+        model: str = "gpt-4o-mini",
         tools: ToolRegistry | None = None,
         shared_memory: SharedMemory | None = None,
         governance: GovernanceLayer | None = None,
         event_bus: EventBus | None = None,
+        node_id: str = "",
     ):
         self.role = role
         self.system_prompt = system_prompt
@@ -45,6 +46,7 @@ class BaseAgent:
         self.shared_memory = shared_memory or SharedMemory()
         self.governance = governance or GovernanceLayer()
         self.event_bus = event_bus or EventBus()
+        self.node_id = node_id
 
         self.runtime = AgentRuntime(
             role=role,
@@ -60,6 +62,9 @@ class BaseAgent:
 
         tool_defs = None
         tool_executor = None
+        # Collect URLs from web_search results for citation chain
+        self._collected_urls: list[dict] = []
+
         if self.tools:
             tool_defs = self.tools.get_tool_definitions_for_role(self.role.value)
             if not tool_defs:
@@ -71,7 +76,15 @@ class BaseAgent:
                             self.role, name
                         ):
                             return f"Permission denied: {self.role.value} cannot use {name}"
-                    return await self.tools.execute(name, params)
+                    result = await self.tools.execute(name, params)
+                    # Auto-collect URLs from web_search results
+                    if name == "web_search":
+                        self._extract_urls_from_search(result)
+                    elif name == "fetch_webpage":
+                        url = params.get("url", "")
+                        if url:
+                            self._collected_urls.append({"url": url, "title": url, "snippet": ""})
+                    return result
 
                 tool_executor = _executor
 
@@ -83,11 +96,30 @@ class BaseAgent:
             )
         )
 
+        # Real-time tool call event callback
+        async def _on_tool_call(
+            tool_name: str, tool_input: str, tool_output: str, status: str
+        ) -> None:
+            await self.event_bus.publish(
+                Event(
+                    "tool_call",
+                    self.node_id or self.runtime.agent_id,
+                    {
+                        "role": self.role.value,
+                        "tool": tool_name,
+                        "input": tool_input,
+                        "output_summary": tool_output,
+                        "status": status,
+                    },
+                )
+            )
+
         result = await self.runtime.run(
             system_prompt=enriched_prompt,
             user_message=task_description,
             tools=tool_defs,
             tool_executor=tool_executor,
+            on_tool_call=_on_tool_call,
         )
 
         if self.governance:
@@ -122,7 +154,27 @@ class BaseAgent:
             )
         )
 
+        # Attach collected URLs to result for downstream citation chain
+        if hasattr(self, "_collected_urls") and self._collected_urls:
+            result["collected_urls"] = self._collected_urls
+
         return result
+
+    def _extract_urls_from_search(self, search_result: str) -> None:
+        """Extract URLs from web_search JSON result and store for citation chain."""
+        try:
+            data = json.loads(search_result)
+            if isinstance(data, list):
+                for item in data:
+                    url = item.get("url", "")
+                    if url and not url.startswith("Error"):
+                        self._collected_urls.append({
+                            "url": url if url.startswith("http") else f"https://{url}",
+                            "title": item.get("title", ""),
+                            "snippet": item.get("snippet", "")[:150],
+                        })
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     def _build_prompt(self, context: dict | None = None) -> str:
         """构建增强后的系统提示"""

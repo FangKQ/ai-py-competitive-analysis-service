@@ -9,13 +9,14 @@ Harness Layer 1: Runtime - Agent Loop 状态机 + 错误恢复 + 棘轮机制
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 import logging
 from datetime import datetime
 from typing import Any, Optional
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 from schemas import (
     AgentDecisionLog,
@@ -52,8 +53,8 @@ class AgentRuntime:
         self,
         agent_id: str | None = None,
         role: AgentRole = AgentRole.ORCHESTRATOR,
-        client: AsyncAnthropic | None = None,
-        model: str = "MiniMax-M2.7",
+        client: AsyncOpenAI | None = None,
+        model: str = "gpt-5.5-2026-04-23",
         max_iterations: int = 20,
         max_tokens: int = 8192,
     ):
@@ -96,17 +97,38 @@ class AgentRuntime:
         user_message: str,
         tools: list[dict] | None = None,
         tool_executor: Any = None,
+        on_tool_call: Any = None,
     ) -> dict:
         """
-        执行 Agent Loop - ReAct 循环
+        执行 Agent Loop - ReAct 循环 (OpenAI Chat Completions API)
+
+        Args:
+            on_tool_call: Optional async callback(tool_name, input, output, status)
+                          called in real-time after each tool execution.
 
         Returns:
             dict with keys: result, decision_logs, tokens_used
         """
         self.status = TaskStatus.RUNNING
-        messages = [{"role": "user", "content": user_message}]
+        self._tool_call_results: list[dict] = []
+        messages = [
+            {"role": "system", "content": system_prompt + self.get_ratchet_constraints()},
+            {"role": "user", "content": user_message},
+        ]
 
-        full_system = system_prompt + self.get_ratchet_constraints()
+        # Convert Anthropic-style tool defs to OpenAI function calling format
+        openai_tools = None
+        if tools:
+            openai_tools = []
+            for t in tools:
+                openai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t.get("description", ""),
+                        "parameters": t.get("input_schema", {"type": "object", "properties": {}}),
+                    },
+                })
 
         iteration = 0
         final_result = None
@@ -118,101 +140,124 @@ class AgentRuntime:
             try:
                 kwargs: dict[str, Any] = {
                     "model": self.model,
-                    "max_tokens": self.max_tokens,
-                    "system": full_system,
+                    "max_completion_tokens": self.max_tokens,
                     "messages": messages,
                 }
-                if tools:
-                    kwargs["tools"] = tools
+                if openai_tools:
+                    kwargs["tools"] = openai_tools
 
-                response = await self.client.messages.create(**kwargs)
+                response = await self.client.chat.completions.create(**kwargs)
 
                 duration_ms = int((time.time() - start_time) * 1000)
-                input_tokens = response.usage.input_tokens
-                output_tokens = response.usage.output_tokens
+                usage = response.usage
+                input_tokens = usage.prompt_tokens if usage else 0
+                output_tokens = usage.completion_tokens if usage else 0
                 self.total_input_tokens += input_tokens
                 self.total_output_tokens += output_tokens
 
-                tool_calls = []
-                text_parts = []
-                has_tool_use = False
+                choice = response.choices[0]
+                message = choice.message
+                finish_reason = choice.finish_reason
 
-                for block in response.content:
-                    if block.type == "text":
-                        text_parts.append(block.text)
-                    elif block.type == "tool_use":
-                        has_tool_use = True
-                        tool_calls.append(
-                            {
-                                "id": block.id,
-                                "name": block.name,
-                                "input": block.input,
-                            }
-                        )
+                tool_calls = []
+                text_content = message.content or ""
+                has_tool_use = bool(message.tool_calls)
+
+                if message.tool_calls:
+                    for tc in message.tool_calls:
+                        tool_calls.append({
+                            "id": tc.id,
+                            "name": tc.function.name,
+                            "input": json.loads(tc.function.arguments) if tc.function.arguments else {},
+                        })
 
                 log_entry = AgentDecisionLog(
                     agent_id=self.agent_id,
                     agent_role=self.role,
                     action=f"iteration_{iteration}",
-                    reasoning="\n".join(text_parts)[:500],
+                    reasoning=text_content[:2000],
                     tool_calls=tool_calls,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     duration_ms=duration_ms,
                     result_summary=(
                         f"{'tool_use' if has_tool_use else 'text_response'}"
-                        f" | stop={response.stop_reason}"
+                        f" | finish={finish_reason}"
                     ),
                 )
                 self.decision_logs.append(log_entry)
 
-                if not has_tool_use or response.stop_reason == "end_turn":
-                    final_result = "\n".join(text_parts)
+                if not has_tool_use or finish_reason == "stop":
+                    final_result = text_content
                     self.status = TaskStatus.COMPLETED
                     break
 
-                messages.append({"role": "assistant", "content": response.content})
+                # Append assistant message with tool calls
+                messages.append(message.model_dump())
 
-                tool_results = []
-                for tc in tool_calls:
+                # Execute tool calls and append results
+                for tc in message.tool_calls:
+                    tc_name = tc.function.name
+                    tc_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+
                     if tool_executor:
                         try:
-                            result = await tool_executor(tc["name"], tc["input"])
-                            tool_results.append(
-                                {
-                                    "type": "tool_result",
-                                    "tool_use_id": tc["id"],
-                                    "content": str(result),
-                                }
-                            )
+                            result = await tool_executor(tc_name, tc_args)
+                            result_str = str(result)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": result_str,
+                            })
+                            # Real-time callback for tool call success
+                            if on_tool_call:
+                                await on_tool_call(
+                                    tc_name,
+                                    str(tc_args)[:200],
+                                    result_str[:200],
+                                    "success",
+                                )
+                            # Track in tool_call_results
+                            self._tool_call_results.append({
+                                "tool": tc_name,
+                                "input": str(tc_args)[:200],
+                                "output_summary": result_str[:200],
+                                "status": "success",
+                            })
                         except Exception as e:
                             error_msg = f"Tool error: {e}"
-                            tool_results.append(
-                                {
-                                    "type": "tool_result",
-                                    "tool_use_id": tc["id"],
-                                    "content": error_msg,
-                                    "is_error": True,
-                                }
-                            )
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": error_msg,
+                            })
+                            # Real-time callback for tool call failure
+                            if on_tool_call:
+                                await on_tool_call(
+                                    tc_name,
+                                    str(tc_args)[:200],
+                                    error_msg[:200],
+                                    "failed",
+                                )
+                            self._tool_call_results.append({
+                                "tool": tc_name,
+                                "input": str(tc_args)[:200],
+                                "output_summary": error_msg[:200],
+                                "status": "failed",
+                            })
                             self.add_ratchet_rule(
-                                trigger=f"Tool '{tc['name']}' failed: {e}",
+                                trigger=f"Tool '{tc_name}' failed: {e}",
                                 constraint=(
-                                    f"When using tool '{tc['name']}', "
+                                    f"When using tool '{tc_name}', "
                                     f"be aware it may fail. Handle gracefully."
                                 ),
                             )
                     else:
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tc["id"],
-                                "content": "Tool execution not available",
-                                "is_error": True,
-                            }
-                        )
-
-                messages.append({"role": "user", "content": tool_results})
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": "Tool execution not available",
+                        })
 
             except Exception as e:
                 logger.error(

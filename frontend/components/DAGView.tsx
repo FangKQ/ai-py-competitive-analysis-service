@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useMemo, useCallback } from "react";
 import ReactFlow, {
   Node,
   Edge,
@@ -11,92 +11,42 @@ import ReactFlow, {
   Handle,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import {
-  Brain,
-  Search,
-  BarChart3,
-  PenTool,
-  ShieldCheck,
-  Link2,
-} from "lucide-react";
+import { Brain, Search, BarChart3, PenTool, ShieldCheck, Link2 } from "lucide-react";
 
-type AgentRole =
-  | "orchestrator"
-  | "collector"
-  | "analyst"
-  | "writer"
-  | "reviewer"
-  | "citation";
+type NodeStatus = "idle" | "running" | "completed" | "error";
 
-type AgentNodeStatus = "idle" | "running" | "completed" | "error";
-
-interface AgentStatus {
-  orchestrator: AgentNodeStatus;
-  collector: AgentNodeStatus;
-  analyst: AgentNodeStatus;
-  writer: AgentNodeStatus;
-  reviewer: AgentNodeStatus;
-  citation: AgentNodeStatus;
+interface DAGNodeInfo {
+  id: string;
+  role: string;
+  label: string;
+  status: NodeStatus;
 }
 
 interface DAGViewProps {
-  agentStatus: AgentStatus;
+  nodes: DAGNodeInfo[];
 }
 
-const AGENT_CONFIG: Record<
-  AgentRole,
-  { label: string; color: string; icon: typeof Brain; description: string }
-> = {
-  orchestrator: {
-    label: "编排器",
-    color: "#8b5cf6",
-    icon: Brain,
-    description: "任务拆解与调度",
-  },
-  collector: {
-    label: "采集器",
-    color: "#06b6d4",
-    icon: Search,
-    description: "竞品信息采集",
-  },
-  analyst: {
-    label: "分析师",
-    color: "#f59e0b",
-    icon: BarChart3,
-    description: "深度数据分析",
-  },
-  writer: {
-    label: "撰写者",
-    color: "#10b981",
-    icon: PenTool,
-    description: "报告内容生成",
-  },
-  reviewer: {
-    label: "审核员",
-    color: "#ef4444",
-    icon: ShieldCheck,
-    description: "质量审查校验",
-  },
-  citation: {
-    label: "引用器",
-    color: "#ec4899",
-    icon: Link2,
-    description: "来源引用标注",
-  },
+const ROLE_CONFIG: Record<string, { color: string; icon: typeof Brain }> = {
+  orchestrator: { color: "#8b5cf6", icon: Brain },
+  collector: { color: "#06b6d4", icon: Search },
+  analyst: { color: "#f59e0b", icon: BarChart3 },
+  writer: { color: "#10b981", icon: PenTool },
+  reviewer: { color: "#ef4444", icon: ShieldCheck },
+  citation: { color: "#ec4899", icon: Link2 },
 };
 
-function AgentNode({ data }: { data: { role: AgentRole; status: AgentNodeStatus } }) {
-  const config = AGENT_CONFIG[data.role];
+function AgentNode({ data }: { data: { label: string; role: string; status: NodeStatus } }) {
+  const config = ROLE_CONFIG[data.role] || ROLE_CONFIG.collector;
   const Icon = config.icon;
 
-  const statusStyles: Record<AgentNodeStatus, string> = {
+  const statusStyles: Record<NodeStatus, string> = {
     idle: "border-surface-600 bg-surface-800",
-    running: "border-primary-500 bg-surface-800 node-running",
+    running: "border-primary-500 bg-surface-800",
     completed: "border-emerald-500 bg-surface-800",
     error: "border-red-500 bg-surface-800",
   };
 
-  const statusDot: Record<AgentNodeStatus, string> = {
+  const statusDot: Record<NodeStatus, string> = {
     idle: "bg-surface-500",
     running: "bg-primary-400 animate-pulse",
     completed: "bg-emerald-400",
@@ -105,41 +55,23 @@ function AgentNode({ data }: { data: { role: AgentRole; status: AgentNodeStatus 
 
   return (
     <div
-      className={`relative px-5 py-4 rounded-xl border-2 min-w-[160px] transition-all duration-300 ${statusStyles[data.status]}`}
+      className={`relative px-4 py-3 rounded-xl border-2 min-w-[140px] transition-all duration-300 ${statusStyles[data.status]}`}
       style={{
         borderColor: data.status === "running" ? config.color : undefined,
-        boxShadow:
-          data.status === "running"
-            ? `0 0 20px ${config.color}33`
-            : undefined,
+        boxShadow: data.status === "running" ? `0 0 20px ${config.color}33` : undefined,
       }}
     >
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!bg-surface-500 !border-surface-400 !w-2.5 !h-2.5"
-      />
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!bg-surface-500 !border-surface-400 !w-2.5 !h-2.5"
-      />
-
-      <div className="flex items-center gap-3">
-        <div
-          className="p-2 rounded-lg"
-          style={{ backgroundColor: `${config.color}20` }}
-        >
-          <Icon className="w-5 h-5" style={{ color: config.color }} />
+      <Handle type="target" position={Position.Left} className="!bg-surface-500 !border-surface-400 !w-2 !h-2" />
+      <Handle type="source" position={Position.Right} className="!bg-surface-500 !border-surface-400 !w-2 !h-2" />
+      <div className="flex items-center gap-2">
+        <div className="p-1.5 rounded-lg" style={{ backgroundColor: `${config.color}20` }}>
+          <Icon className="w-4 h-4" style={{ color: config.color }} />
         </div>
         <div>
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm text-surface-100">
-              {config.label}
-            </span>
-            <span className={`w-2 h-2 rounded-full ${statusDot[data.status]}`} />
+          <div className="flex items-center gap-1.5">
+            <span className="font-medium text-xs text-surface-100">{data.label}</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${statusDot[data.status]}`} />
           </div>
-          <span className="text-xs text-surface-400">{config.description}</span>
         </div>
       </div>
     </div>
@@ -148,135 +80,145 @@ function AgentNode({ data }: { data: { role: AgentRole; status: AgentNodeStatus 
 
 const nodeTypes = { agentNode: AgentNode };
 
-export default function DAGView({ agentStatus }: DAGViewProps) {
-  const nodes: Node[] = useMemo(
-    () => [
-      {
-        id: "orchestrator",
-        type: "agentNode",
-        position: { x: 80, y: 200 },
-        data: { role: "orchestrator", status: agentStatus.orchestrator },
-      },
-      {
-        id: "collector",
-        type: "agentNode",
-        position: { x: 350, y: 100 },
-        data: { role: "collector", status: agentStatus.collector },
-      },
-      {
-        id: "analyst",
-        type: "agentNode",
-        position: { x: 350, y: 300 },
-        data: { role: "analyst", status: agentStatus.analyst },
-      },
-      {
-        id: "writer",
-        type: "agentNode",
-        position: { x: 620, y: 200 },
-        data: { role: "writer", status: agentStatus.writer },
-      },
-      {
-        id: "reviewer",
-        type: "agentNode",
-        position: { x: 890, y: 120 },
-        data: { role: "reviewer", status: agentStatus.reviewer },
-      },
-      {
-        id: "citation",
-        type: "agentNode",
-        position: { x: 890, y: 300 },
-        data: { role: "citation", status: agentStatus.citation },
-      },
-    ],
-    [agentStatus]
-  );
+export default function DAGView({ nodes }: DAGViewProps) {
+  // Compute layout positions dynamically
+  const { flowNodes, flowEdges } = useMemo(() => {
+    if (nodes.length === 0) {
+      return { flowNodes: [], flowEdges: [] };
+    }
 
-  const edges: Edge[] = useMemo(
-    () => [
-      {
-        id: "e-orch-coll",
-        source: "orchestrator",
-        target: "collector",
-        animated: agentStatus.collector === "running",
-        style: { stroke: "#6366f1", strokeWidth: 2 },
-      },
-      {
-        id: "e-orch-anal",
-        source: "orchestrator",
-        target: "analyst",
-        animated: agentStatus.analyst === "running",
-        style: { stroke: "#6366f1", strokeWidth: 2 },
-      },
-      {
-        id: "e-coll-writer",
-        source: "collector",
-        target: "writer",
-        animated: agentStatus.writer === "running",
-        style: { stroke: "#6366f1", strokeWidth: 2 },
-      },
-      {
-        id: "e-anal-writer",
-        source: "analyst",
-        target: "writer",
-        animated: agentStatus.writer === "running",
-        style: { stroke: "#6366f1", strokeWidth: 2 },
-      },
-      {
-        id: "e-writer-rev",
-        source: "writer",
-        target: "reviewer",
-        animated: agentStatus.reviewer === "running",
-        style: { stroke: "#6366f1", strokeWidth: 2 },
-      },
-      {
-        id: "e-writer-cite",
-        source: "writer",
-        target: "citation",
-        animated: agentStatus.citation === "running",
-        style: { stroke: "#6366f1", strokeWidth: 2 },
-      },
-    ],
-    [agentStatus]
-  );
+    const collectors = nodes.filter((n) => n.role === "collector");
+    const orchestrator = nodes.find((n) => n.role === "orchestrator");
+    const postCollector = nodes.filter(
+      (n) => n.role !== "collector" && n.role !== "orchestrator"
+    );
+
+    // Layout: Orchestrator at left, Collectors in middle column, rest to the right
+    const colWidth = 220;
+    const rowHeight = 70;
+    const collectorStartY = Math.max(0, (collectors.length - 1) * rowHeight * 0.5);
+
+    const fNodes: Node[] = [];
+    const fEdges: Edge[] = [];
+
+    // Orchestrator
+    if (orchestrator) {
+      const orchY = collectors.length > 0 ? collectorStartY : 100;
+      fNodes.push({
+        id: orchestrator.id,
+        type: "agentNode",
+        position: { x: 50, y: orchY },
+        data: { label: orchestrator.label, role: orchestrator.role, status: orchestrator.status },
+      });
+    }
+
+    // Collectors
+    collectors.forEach((c, i) => {
+      const y = i * rowHeight;
+      fNodes.push({
+        id: c.id,
+        type: "agentNode",
+        position: { x: 50 + colWidth, y },
+        data: { label: c.label, role: c.role, status: c.status },
+      });
+
+      // Edge from orchestrator to each collector
+      if (orchestrator) {
+        fEdges.push({
+          id: `e-orch-${c.id}`,
+          source: orchestrator.id,
+          target: c.id,
+          animated: c.status === "running",
+          style: { stroke: "#6366f1", strokeWidth: 2 },
+        });
+      }
+    });
+
+    // Post-collector nodes in sequence
+    const postStartX = 50 + colWidth * 2;
+    const postY = collectors.length > 0 ? collectorStartY : 100;
+
+    // Define order: analyst → writer → citation → reviewer
+    const orderedRoles = ["analyst", "writer", "citation", "reviewer"];
+    const orderedNodes = orderedRoles
+      .map((role) => postCollector.find((n) => n.role === role))
+      .filter(Boolean) as DAGNodeInfo[];
+
+    orderedNodes.forEach((n, i) => {
+      fNodes.push({
+        id: n.id,
+        type: "agentNode",
+        position: { x: postStartX + i * colWidth, y: postY },
+        data: { label: n.label, role: n.role, status: n.status },
+      });
+
+      if (i === 0) {
+        // Connect all collectors to analyst
+        collectors.forEach((c) => {
+          fEdges.push({
+            id: `e-${c.id}-${n.id}`,
+            source: c.id,
+            target: n.id,
+            animated: n.status === "running",
+            style: { stroke: "#6366f1", strokeWidth: 2 },
+          });
+        });
+      } else {
+        // Sequential edges between post-collector nodes
+        const prev = orderedNodes[i - 1];
+        fEdges.push({
+          id: `e-${prev.id}-${n.id}`,
+          source: prev.id,
+          target: n.id,
+          animated: n.status === "running",
+          style: { stroke: "#6366f1", strokeWidth: 2 },
+        });
+      }
+    });
+
+    return { flowNodes: fNodes, flowEdges: fEdges };
+  }, [nodes]);
 
   const onInit = useCallback((instance: any) => {
-    instance.fitView({ padding: 0.2 });
+    instance.fitView({ padding: 0.3, maxZoom: 0.85 });
   }, []);
 
+  if (nodes.length === 0) {
+    return (
+      <div className="h-full w-full flex items-center justify-center text-surface-400">
+        等待编排器规划任务...
+      </div>
+    );
+  }
+
   return (
-    <div className="h-full w-full" style={{ minHeight: "500px" }}>
+    <div className="h-full w-full absolute inset-0">
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
+        nodes={flowNodes}
+        edges={flowEdges}
         nodeTypes={nodeTypes}
         onInit={onInit}
         fitView
+        fitViewOptions={{ padding: 0.3, maxZoom: 0.85 }}
+        minZoom={0.3}
+        maxZoom={1.2}
         proOptions={{ hideAttribution: true }}
         className="bg-surface-900"
       >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1}
-          color="#334155"
-        />
-        <Controls
-          className="!bg-surface-800 !border-surface-700 !shadow-xl [&>button]:!bg-surface-800 [&>button]:!border-surface-700 [&>button]:!text-surface-300 [&>button:hover]:!bg-surface-700"
-        />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#334155" />
+        <Controls className="!bg-surface-800 !border-surface-700 !shadow-xl [&>button]:!bg-surface-800 [&>button]:!border-surface-700 [&>button]:!text-surface-300 [&>button:hover]:!bg-surface-700" />
       </ReactFlow>
 
-      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-4 py-2.5 bg-surface-800/90 backdrop-blur-sm rounded-lg border border-surface-700">
+      <div className="absolute top-2 left-2 flex items-center gap-3 px-3 py-1.5 bg-surface-800/90 backdrop-blur-sm rounded-lg border border-surface-700 z-10">
         <span className="text-xs text-surface-400 font-medium">状态：</span>
-        {(
-          [
-            ["idle", "等待中", "bg-surface-500"],
-            ["running", "运行中", "bg-primary-400"],
-            ["completed", "已完成", "bg-emerald-400"],
-            ["error", "异常", "bg-red-400"],
-          ] as const
-        ).map(([, label, color]) => (
-          <span key={label} className="flex items-center gap-1.5 text-xs text-surface-300">
-            <span className={`w-2 h-2 rounded-full ${color}`} />
+        {([
+          ["idle", "等待中", "bg-surface-500"],
+          ["running", "运行中", "bg-primary-400"],
+          ["completed", "已完成", "bg-emerald-400"],
+          ["error", "异常", "bg-red-400"],
+        ] as const).map(([, label, color]) => (
+          <span key={label} className="flex items-center gap-1 text-xs text-surface-300">
+            <span className={`w-1.5 h-1.5 rounded-full ${color}`} />
             {label}
           </span>
         ))}

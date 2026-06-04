@@ -18,9 +18,19 @@ class Settings(BaseSettings):
     )
     minimax_model: str = Field(default="MiniMax-M2.7", env="MINIMAX_MODEL")
 
+    # Model layering: heavy tasks use large model, light tasks use mini
+    model_large: str = Field(default="gpt-5.5-2026-04-23", env="MODEL_LARGE")
+    model_small: str = Field(default="gpt-4.1-mini", env="MODEL_SMALL")
+
+    # Tavily Search API
+    tavily_api_key: str = Field(default="", env="TAVILY_API_KEY")
+
     database_url: str = Field(
         default="sqlite+aiosqlite:///./data/competitive_analysis.db",
         env="DATABASE_URL",
+    )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0", env="REDIS_URL"
     )
 
     log_level: str = Field(default="INFO", env="LOG_LEVEL")

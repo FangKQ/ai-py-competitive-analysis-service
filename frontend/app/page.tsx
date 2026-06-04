@@ -13,44 +13,41 @@ import {
   Activity,
   FileText,
   GitBranch,
+  X,
 } from "lucide-react";
 
 type AppState = "idle" | "creating" | "running" | "completed";
 
-interface AgentStatus {
-  orchestrator: "idle" | "running" | "completed" | "error";
-  collector: "idle" | "running" | "completed" | "error";
-  analyst: "idle" | "running" | "completed" | "error";
-  writer: "idle" | "running" | "completed" | "error";
-  reviewer: "idle" | "running" | "completed" | "error";
-  citation: "idle" | "running" | "completed" | "error";
+export interface DAGNodeInfo {
+  id: string;
+  role: string;
+  label: string;
+  status: "idle" | "running" | "completed" | "error";
 }
 
-interface TraceEntry {
+export interface TraceEntry {
   id: string;
-  agent: string;
+  nodeId: string;
+  label: string;
+  role: string;
   action: string;
   reasoning: string;
-  toolCalls: string[];
+  toolCalls: { tool: string; input: string; output_summary: string; status: string }[];
   tokens: number;
   duration: number;
   timestamp: string;
 }
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 export default function HomePage() {
   const [appState, setAppState] = useState<AppState>("idle");
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [agentStatus, setAgentStatus] = useState<AgentStatus>({
-    orchestrator: "idle",
-    collector: "idle",
-    analyst: "idle",
-    writer: "idle",
-    reviewer: "idle",
-    citation: "idle",
-  });
+  const [dagNodes, setDagNodes] = useState<DAGNodeInfo[]>([]);
   const [traces, setTraces] = useState<TraceEntry[]>([]);
   const [report, setReport] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"dag" | "trace" | "report">("dag");
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReady, setReportReady] = useState(false);
 
   const handleStartAnalysis = () => {
     setAppState("creating");
@@ -59,46 +56,160 @@ export default function HomePage() {
   const handleSubmitTask = useCallback(
     async (data: {
       query: string;
+      selfDescription: string;
       competitors: string[];
       industry: string;
       focusAreas: string[];
+      reportDepth: "brief" | "standard";
     }) => {
       try {
         const task = await createTask(data);
         setTaskId(task.id);
         setAppState("running");
 
+        // Start with just orchestrator node
+        setDagNodes([
+          { id: "orchestrate", role: "orchestrator", label: "编排器", status: "running" },
+        ]);
+
         const eventSource = streamEvents(task.id);
 
         eventSource.onmessage = (event) => {
           const payload = JSON.parse(event.data);
 
-          if (payload.type === "agent_status") {
-            setAgentStatus((prev) => ({
-              ...prev,
-              [payload.agent]: payload.status,
-            }));
+          // DAG plan received - render full dynamic DAG
+          if (payload.type === "dag_plan") {
+            const nodes: DAGNodeInfo[] = (payload.data?.nodes || []).map(
+              (n: { id: string; role: string; label: string }) => ({
+                ...n,
+                status: n.id === "orchestrate" ? "completed" : "idle",
+              })
+            );
+            setDagNodes(nodes);
           }
 
-          if (payload.type === "trace") {
-            setTraces((prev) => [
-              ...prev,
-              {
-                id: payload.id || crypto.randomUUID(),
-                agent: payload.agent,
-                action: payload.action,
-                reasoning: payload.reasoning || "",
-                toolCalls: payload.tool_calls || [],
-                tokens: payload.tokens || 0,
-                duration: payload.duration || 0,
-                timestamp: payload.timestamp || new Date().toISOString(),
-              },
-            ]);
+          // Node started
+          if (payload.type === "node_started") {
+            setDagNodes((prev) =>
+              prev.map((n) =>
+                n.id === payload.source ? { ...n, status: "running" } : n
+              )
+            );
           }
 
-          if (payload.type === "report") {
-            setReport(payload.content);
-            setAppState("completed");
+          // Node completed
+          if (payload.type === "node_completed") {
+            setDagNodes((prev) =>
+              prev.map((n) =>
+                n.id === payload.source ? { ...n, status: "completed" } : n
+              )
+            );
+          }
+
+          // Node failed
+          if (payload.type === "node_failed") {
+            setDagNodes((prev) =>
+              prev.map((n) =>
+                n.id === payload.source ? { ...n, status: "error" } : n
+              )
+            );
+          }
+
+          // Node trace - enrich existing trace with final info (reasoning, tokens, duration)
+          if (payload.type === "node_trace") {
+            const d = payload.data || {};
+            const nodeId = payload.source;
+            setTraces((prev) => {
+              const existingIdx = prev.findIndex((t) => t.nodeId === nodeId);
+              if (existingIdx >= 0) {
+                // Enrich existing entry with final data
+                const updated = [...prev];
+                const existing = updated[existingIdx];
+                updated[existingIdx] = {
+                  ...existing,
+                  label: d.label || existing.label,
+                  action: d.label || existing.action,
+                  reasoning: d.reasoning || existing.reasoning,
+                  toolCalls: (d.tool_calls && d.tool_calls.length > 0) ? d.tool_calls : existing.toolCalls,
+                  tokens: (d.input_tokens || 0) + (d.output_tokens || 0),
+                  duration: d.duration_ms || 0,
+                };
+                return updated;
+              }
+              // No existing entry — create new (for agents without tool calls)
+              return [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  nodeId,
+                  label: d.label || nodeId,
+                  role: d.role || "",
+                  action: d.label || "执行完成",
+                  reasoning: d.reasoning || "",
+                  toolCalls: d.tool_calls || [],
+                  tokens: (d.input_tokens || 0) + (d.output_tokens || 0),
+                  duration: d.duration_ms || 0,
+                  timestamp: payload.timestamp || new Date().toISOString(),
+                },
+              ];
+            });
+          }
+
+          // Real-time tool call — append to matching trace or create temp entry
+          if (payload.type === "tool_call") {
+            const d = payload.data || {};
+            const nodeId = payload.source; // Now uses node_id thanks to backend fix
+            const toolEntry = {
+              tool: d.tool || "unknown",
+              input: d.input || "",
+              output_summary: d.output_summary || "",
+              status: d.status || "success",
+            };
+            setTraces((prev) => {
+              const existingIdx = prev.findIndex((t) => t.nodeId === nodeId);
+              if (existingIdx >= 0) {
+                const updated = [...prev];
+                updated[existingIdx] = {
+                  ...updated[existingIdx],
+                  toolCalls: [...updated[existingIdx].toolCalls, toolEntry],
+                };
+                return updated;
+              }
+              // Find label from dagNodes
+              const dagNode = dagNodes.find((n) => n.id === nodeId);
+              const label = dagNode?.label || nodeId;
+              return [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  nodeId,
+                  label,
+                  role: d.role || "",
+                  action: "采集中...",
+                  reasoning: "",
+                  toolCalls: [toolEntry],
+                  tokens: 0,
+                  duration: 0,
+                  timestamp: payload.timestamp || new Date().toISOString(),
+                },
+              ];
+            });
+          }
+
+          // Done
+          if (payload.type === "done") {
+            fetch(`${API_BASE}/api/tasks/${task.id}/report`)
+              .then((res) => res.json())
+              .then((data) => {
+                setReport(data.markdown_report || data.executive_summary || "");
+                setAppState("completed");
+                setReportReady(true);
+                // Delay open so DOM renders first, then transition plays
+                requestAnimationFrame(() => {
+                  setTimeout(() => setReportOpen(true), 50);
+                });
+              })
+              .catch(() => setAppState("completed"));
             eventSource.close();
           }
         };
@@ -110,53 +221,72 @@ export default function HomePage() {
         console.error("Task creation failed:", error);
       }
     },
-    []
+    [dagNodes]
   );
 
   const handleDemoRun = useCallback(() => {
     setAppState("running");
     setTaskId("demo-001");
+    setDagNodes([
+      { id: "orchestrate", role: "orchestrator", label: "编排器", status: "completed" },
+      { id: "collect_industry", role: "collector", label: "行业/趋势采集", status: "idle" },
+      { id: "collect_customer", role: "collector", label: "市场/客户采集", status: "idle" },
+      { id: "collect_competitor_0", role: "collector", label: "GitHub Copilot", status: "idle" },
+      { id: "collect_competitor_1", role: "collector", label: "Cursor", status: "idle" },
+      { id: "analyze", role: "analyst", label: "分析师", status: "idle" },
+      { id: "write", role: "writer", label: "撰写者", status: "idle" },
+      { id: "cite", role: "citation", label: "引用器", status: "idle" },
+      { id: "review", role: "reviewer", label: "审核员", status: "idle" },
+    ]);
 
-    const demoSequence: { agent: keyof AgentStatus; delay: number }[] = [
-      { agent: "orchestrator", delay: 500 },
-      { agent: "collector", delay: 2000 },
-      { agent: "analyst", delay: 4000 },
-      { agent: "writer", delay: 6000 },
-      { agent: "reviewer", delay: 8000 },
-      { agent: "citation", delay: 9500 },
+    const sequence = [
+      { id: "collect_industry", delay: 1000 },
+      { id: "collect_customer", delay: 1500 },
+      { id: "collect_competitor_0", delay: 2000 },
+      { id: "collect_competitor_1", delay: 2500 },
+      { id: "analyze", delay: 5000 },
+      { id: "write", delay: 7000 },
+      { id: "cite", delay: 9000 },
+      { id: "review", delay: 10500 },
     ];
 
-    demoSequence.forEach(({ agent, delay }) => {
+    sequence.forEach(({ id, delay }) => {
       setTimeout(() => {
-        setAgentStatus((prev) => ({ ...prev, [agent]: "running" }));
+        setDagNodes((prev) => prev.map((n) => (n.id === id ? { ...n, status: "running" } : n)));
+      }, delay);
+      setTimeout(() => {
+        setDagNodes((prev) => prev.map((n) => (n.id === id ? { ...n, status: "completed" } : n)));
         setTraces((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
-            agent,
-            action: `${agent} 开始处理任务`,
-            reasoning: `分析当前任务上下文，决定执行 ${agent} 阶段的数据处理流程`,
-            toolCalls: [`${agent}.execute()`, `${agent}.validate()`],
-            tokens: Math.floor(Math.random() * 2000) + 500,
-            duration: Math.floor(Math.random() * 3000) + 1000,
+            nodeId: id,
+            label: id,
+            role: "demo",
+            action: `${id} 完成`,
+            reasoning: "Demo 模式模拟执行",
+            toolCalls: [{ tool: "web_search", input: "demo query", output_summary: "Demo 结果", status: "success" }],
+            tokens: Math.floor(Math.random() * 3000) + 500,
+            duration: Math.floor(Math.random() * 5000) + 2000,
             timestamp: new Date().toISOString(),
           },
         ]);
-      }, delay);
-
-      setTimeout(() => {
-        setAgentStatus((prev) => ({ ...prev, [agent]: "completed" }));
       }, delay + 1500);
     });
 
     setTimeout(() => {
       setReport(DEMO_REPORT);
       setAppState("completed");
-    }, 11000);
+      setReportReady(true);
+      // Delay open so DOM renders first, then transition plays
+      requestAnimationFrame(() => {
+        setTimeout(() => setReportOpen(true), 50);
+      });
+    }, 12000);
   }, []);
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className={`h-screen flex flex-col ${appState === "running" || appState === "completed" ? "overflow-hidden" : "overflow-y-auto"}`}>
       <Header />
 
       {appState === "idle" && (
@@ -173,7 +303,7 @@ export default function HomePage() {
 
             <p className="text-lg text-surface-400 mb-12 max-w-2xl mx-auto leading-relaxed">
               基于多 Agent 架构，自动化完成竞品信息采集、深度分析、报告撰写与质量审核。
-              6 个专业 Agent 协同工作，为您提供全面的竞品洞察。
+              多维度方法论驱动，为您提供战略级竞品洞察。
             </p>
 
             <div className="flex items-center justify-center gap-4">
@@ -195,26 +325,11 @@ export default function HomePage() {
 
             <div className="grid grid-cols-3 gap-6 mt-20">
               {[
-                {
-                  icon: GitBranch,
-                  title: "DAG 任务编排",
-                  desc: "可视化 Agent 协作流程",
-                },
-                {
-                  icon: Activity,
-                  title: "实时追踪",
-                  desc: "全链路决策日志透明可见",
-                },
-                {
-                  icon: FileText,
-                  title: "专业报告",
-                  desc: "结构化分析带引用溯源",
-                },
+                { icon: GitBranch, title: "DAG 任务编排", desc: "可视化 Agent 协作流程" },
+                { icon: Activity, title: "实时追踪", desc: "全链路决策日志透明可见" },
+                { icon: FileText, title: "战略分析报告", desc: "战略级分析带引用溯源" },
               ].map((item) => (
-                <div
-                  key={item.title}
-                  className="p-6 rounded-xl bg-surface-800/50 border border-surface-700/50"
-                >
+                <div key={item.title} className="p-6 rounded-xl bg-surface-800/50 border border-surface-700/50">
                   <item.icon className="w-8 h-8 text-primary-400 mb-3" />
                   <h3 className="font-semibold mb-1">{item.title}</h3>
                   <p className="text-sm text-surface-400">{item.desc}</p>
@@ -239,95 +354,107 @@ export default function HomePage() {
 
       {(appState === "running" || appState === "completed") && (
         <main className="flex-1 flex flex-col overflow-hidden">
-          <div className="border-b border-surface-700 px-6">
-            <div className="flex items-center gap-1">
-              {[
-                { key: "dag" as const, label: "Agent DAG", icon: GitBranch },
-                { key: "trace" as const, label: "决策追踪", icon: Activity },
-                { key: "report" as const, label: "分析报告", icon: FileText },
-              ].map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
-                  className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-                    activeTab === tab.key
-                      ? "border-primary-500 text-primary-300"
-                      : "border-transparent text-surface-400 hover:text-surface-200"
-                  }`}
-                >
-                  <tab.icon className="w-4 h-4" />
-                  {tab.label}
-                </button>
-              ))}
-              {taskId && (
-                <span className="ml-auto text-xs text-surface-500 font-mono">
-                  Task: {taskId}
-                </span>
-              )}
-            </div>
-          </div>
+          {/* DAG area - frozen at top */}
+          <section className="relative flex-shrink-0 border-b border-surface-700" style={{ height: "280px" }}>
+            <DAGView nodes={dagNodes} />
+          </section>
 
-          <div className="flex-1 overflow-hidden">
-            {activeTab === "dag" && <DAGView agentStatus={agentStatus} />}
-            {activeTab === "trace" && <TracePanel traces={traces} />}
-            {activeTab === "report" && <ReportView content={report} />}
-          </div>
+          {/* Trace area - scrollable within remaining space */}
+          <section className="flex-1 overflow-y-auto scrollbar-thin">
+            <TracePanel traces={traces} />
+          </section>
+
+          {/* Report button - show when completed but panel closed */}
+          {appState === "completed" && report && !reportOpen && (
+            <button
+              onClick={() => setReportOpen(true)}
+              className="fixed top-16 right-4 z-40 inline-flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold rounded-lg shadow-lg shadow-primary-600/30 hover:shadow-primary-600/50 transition-all duration-200 hover:-translate-y-0.5"
+            >
+              <FileText className="w-4 h-4" />
+              查看报告
+            </button>
+          )}
+
+          {/* Report slide-in panel from right */}
+          {reportReady && (
+            <>
+              {/* Backdrop */}
+              <div
+                className={`fixed inset-0 z-50 bg-black/60 backdrop-blur-sm transition-opacity duration-300 ${reportOpen ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+                onClick={() => setReportOpen(false)}
+              />
+              {/* Panel */}
+              <div
+                className={`fixed top-0 right-0 z-50 h-full w-full max-w-3xl bg-surface-900 border-l border-surface-700 shadow-2xl transition-transform duration-300 ease-out ${reportOpen ? "translate-x-0" : "translate-x-full"}`}
+              >
+                <div className="flex items-center justify-between px-6 py-4 border-b border-surface-700 bg-surface-900/95 backdrop-blur-sm sticky top-0 z-10">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-primary-400" />
+                    <h3 className="text-lg font-semibold">竞品分析报告</h3>
+                  </div>
+                  <button
+                    onClick={() => setReportOpen(false)}
+                    className="p-2 rounded-lg text-surface-400 hover:text-surface-200 hover:bg-surface-800 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="overflow-y-auto h-[calc(100%-65px)] scrollbar-thin">
+                  <ReportView content={report} taskId={taskId} />
+                </div>
+              </div>
+            </>
+          )}
         </main>
       )}
     </div>
   );
 }
 
-const DEMO_REPORT = `# 竞品分析报告：AI 编程助手市场
+const DEMO_REPORT = `# AI 编程助手市场竞争分析报告
 
-## 执行摘要
+## 摘要
+本报告分析了 AI 编程助手市场竞争格局，市场规模预计 2025 年达 50 亿美元 [1]。GitHub Copilot 和 Cursor 占据领导地位，市场正从代码补全向全链路 AI 开发平台演进。
 
-本报告对当前 AI 编程助手市场的主要竞品进行了全面分析，涵盖 GitHub Copilot、Cursor、Codeium 和 Amazon CodeWhisperer 四款产品。分析表明，市场正从基础代码补全向全链路 AI 开发平台演进[^1]。
+## 一、看行业/趋势
+全球 AI 编程助手市场 2024 年规模约 48.6 亿美元，年复合增长率 27.1% [1]。预计 2028 年突破 200 亿美元 [2]。关键技术趋势包括多模态理解、Agent 化工作流、长上下文支持。
 
-## 竞品概览
+## 二、看市场/客户
+目标客户分为个人开发者和企业团队两大群体。企业客户决策因素依次为：安全合规 > 集成能力 > 代码质量 > 价格。未被满足的需求集中在私有化部署和行业定制化。
 
-| 产品 | 公司 | 定位 | 月活用户 |
-|------|------|------|----------|
-| GitHub Copilot | Microsoft/GitHub | 全功能 AI 编程伙伴 | 1500万+ |
-| Cursor | Anysphere | AI-Native IDE | 200万+ |
-| Codeium | Exafunction | 免费 AI 代码助手 | 100万+ |
-| CodeWhisperer | Amazon | AWS 生态集成 | 50万+ |
+## 三、看竞争
 
-## SWOT 分析
+| 能力维度 | GitHub Copilot | Cursor | Codeium |
+|---------|---------------|--------|---------|
+| 代码补全 | 强 | 强 | 中 |
+| Agent 能力 | 中 | 强 | 弱 |
+| 安全合规 | 强 | 中 | 中 |
+| 价格竞争力 | 弱 | 中 | 强 |
 
-### GitHub Copilot
-- **优势**: 海量训练数据、GitHub 生态深度集成、品牌认知度高[^2]
-- **劣势**: 价格较高、隐私顾虑、定制化能力有限
-- **机会**: Enterprise 市场扩展、Agent 模式演进
-- **威胁**: 开源替代品涌现、竞品差异化竞争
+## 四、看自己
+我们具备大模型微调和 RAG 应用开发的核心能力，但品牌知名度低，产品处于 MVP 阶段。
 
-### Cursor
-- **优势**: AI-Native 设计理念、多模型支持、创新交互体验[^3]
-- **劣势**: 用户基数较小、生态建设早期
-- **机会**: 开发者工作流革新、团队协作场景
-- **威胁**: VS Code 功能追赶、大厂资源碾压
+## 五、看机会
+💡 基于分析的战略建议
 
-## 功能对比
+企业级私有化部署是最大机会窗口（吸引力高、可行性中）。
 
-| 功能维度 | Copilot | Cursor | Codeium | CodeWhisperer |
-|----------|---------|--------|---------|---------------|
-| 代码补全 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
-| 多文件编辑 | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ |
-| 对话能力 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
-| Agent 能力 | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ | ⭐⭐ |
-| 安全合规 | ⭐⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+## 六、定控制点
+💡 基于分析的战略建议
 
-## 建议
+建议以"私有化部署 + 行业知识库"作为核心壁垒。⭐ 推荐
 
-1. **差异化定位**: 聚焦垂直场景（如安全审计、数据工程），避免正面竞争
-2. **技术壁垒**: 投资 Agent 架构和工具链集成，构建生态护城河
-3. **商业模式**: 采用 Freemium + Enterprise 双轨策略，快速获客[^4]
-4. **合作生态**: 与云厂商和开发工具链深度集成
+## 七、定目标
+💡 基于分析的战略建议
 
----
+短期（6个月）：完成产品 GA，获取 10 个付费企业客户。
 
-[^1]: Gartner, "AI-Augmented Software Engineering", 2025
-[^2]: GitHub Blog, "Copilot Metrics Report", 2025
-[^3]: TechCrunch, "Cursor raises Series B", 2025
-[^4]: McKinsey, "The economic potential of generative AI in software", 2025
+## 八、定策略
+💡 基于分析的战略建议
+
+产品策略：聚焦企业安全场景，提供私有化方案。⭐ 推荐
+
+## 附录：数据来源
+[1] Grand View Research - AI Code Assistants Market Report 2024 - https://www.grandviewresearch.com/
+[2] Gartner - AI-Augmented Software Engineering Forecast - https://www.gartner.com/
 `;

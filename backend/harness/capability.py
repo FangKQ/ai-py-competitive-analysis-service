@@ -65,7 +65,58 @@ class ToolRegistry:
 
 
 async def web_search(query: str, max_results: int = 5) -> str:
-    """Web 搜索工具 - 使用 DuckDuckGo HTML 搜索"""
+    """Web 搜索工具 - 优先使用 Tavily API，fallback 到 DuckDuckGo"""
+    # Try Tavily first
+    tavily_result = await _tavily_search(query, max_results)
+    if tavily_result:
+        return tavily_result
+
+    # Fallback to DuckDuckGo
+    return await _duckduckgo_search(query, max_results)
+
+
+async def _tavily_search(query: str, max_results: int = 5) -> str | None:
+    """Tavily Search API - optimized for LLM consumption"""
+    try:
+        from config import settings
+        api_key = settings.tavily_api_key
+        if not api_key:
+            return None
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": query,
+                    "max_results": max_results,
+                    "search_depth": "basic",
+                    "include_answer": False,
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning(f"Tavily search returned {resp.status_code}")
+                return None
+
+            data = resp.json()
+            results = []
+            for r in data.get("results", [])[:max_results]:
+                results.append({
+                    "title": r.get("title", ""),
+                    "snippet": r.get("content", "")[:300],
+                    "url": r.get("url", ""),
+                })
+            if results:
+                logger.info(f"Tavily search returned {len(results)} results for: {query[:50]}")
+                return json.dumps(results, ensure_ascii=False)
+            return None
+    except Exception as e:
+        logger.warning(f"Tavily search failed: {e}")
+        return None
+
+
+async def _duckduckgo_search(query: str, max_results: int = 5) -> str:
+    """DuckDuckGo HTML search fallback"""
     async with httpx.AsyncClient(timeout=15.0) as client:
         try:
             resp = await client.get(
@@ -93,10 +144,12 @@ async def web_search(query: str, max_results: int = 5) -> str:
                             ),
                         }
                     )
+            if not results:
+                logger.warning(f"DuckDuckGo returned 0 results for: {query}")
             return json.dumps(results, ensure_ascii=False)
         except Exception as e:
-            logger.warning(f"Web search failed: {e}")
-            return json.dumps({"error": str(e)})
+            logger.warning(f"DuckDuckGo search failed for '{query}': {e}")
+            return json.dumps({"error": str(e), "query": query})
 
 
 async def fetch_webpage(url: str, max_length: int = 5000) -> str:

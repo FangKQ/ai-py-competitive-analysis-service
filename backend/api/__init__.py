@@ -10,12 +10,13 @@ from datetime import datetime
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from agents import CompetitiveAnalysisEngine
 from config import settings
-from schemas import AnalysisTask, TaskStatus
+from schemas import AnalysisTask, TaskStatus, ReportDepth
 
 logger = logging.getLogger(__name__)
 
@@ -31,16 +32,20 @@ def _get_or_create_engine(task_id: str) -> CompetitiveAnalysisEngine:
             api_key=settings.minimax_api_key,
             base_url=settings.minimax_base_url,
             model=settings.minimax_model,
+            model_large=settings.model_large,
+            model_small=settings.model_small,
             task_id=task_id,
         )
     return _engines[task_id]
 
 
 class CreateTaskRequest(BaseModel):
-    query: str = Field(description="竞品分析需求描述")
-    competitors: list[str] = Field(default_factory=list, description="竞品列表")
+    query: str = Field(description="竞品分析需求描述（分析目标）")
+    self_description: str = Field(default="", description="自身核心能力、资源、市场定位描述")
+    competitors: list[str] = Field(default_factory=list, description="竞品列表（可选）")
     industry: str = Field(default="", description="行业")
-    focus_areas: list[str] = Field(default_factory=list, description="分析焦点")
+    focus_areas: list[str] = Field(default_factory=list, description="重点关注维度（可选）")
+    report_depth: str = Field(default="standard", description="报告篇幅：brief/standard")
     use_demo: str = Field(default="", description="使用预设 Demo 场景 ID")
 
 
@@ -55,11 +60,16 @@ class TaskResponse(BaseModel):
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(req: CreateTaskRequest):
     """创建竞品分析任务"""
+    # Map report_depth string to enum
+    depth = ReportDepth.BRIEF if req.report_depth == "brief" else ReportDepth.STANDARD
+
     task = AnalysisTask(
         query=req.query,
+        self_description=req.self_description,
         competitors=req.competitors,
         industry=req.industry,
         focus_areas=req.focus_areas,
+        report_depth=depth,
     )
     _tasks[task.task_id] = task
 
@@ -352,6 +362,36 @@ async def get_engine_status():
             for s in TaskStatus
         },
     }
+
+
+@router.get("/tasks/{task_id}/export/pdf")
+async def export_pdf(task_id: str):
+    """导出竞品分析报告为 PDF"""
+    task = _tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if not task.report:
+        raise HTTPException(status_code=404, detail="Report not ready yet")
+    if not task.report.markdown_report:
+        raise HTTPException(status_code=404, detail="Report content is empty")
+
+    try:
+        from export import render_pdf
+
+        pdf_bytes = render_pdf(task.report.markdown_report)
+        filename = f"competitive_analysis_{task_id[:8]}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"PDF export failed for {task_id}: {e}")
+        raise HTTPException(status_code=500, detail="PDF export failed")
 
 
 @router.get("/health")

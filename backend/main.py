@@ -44,6 +44,11 @@ app.include_router(api_router)
 data_dir = settings.data_dir
 data_dir.mkdir(parents=True, exist_ok=True)
 
+# Mount landing page static files at /landing only (avoid root catch-all)
+landing_dir = Path(__file__).resolve().parent.parent / "landing"
+if landing_dir.is_dir():
+    app.mount("/landing", StaticFiles(directory=str(landing_dir), html=True), name="landing")
+
 
 @app.get("/")
 async def root():
@@ -52,4 +57,5 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "health": "/api/health",
+        "landing": "/landing",
     }

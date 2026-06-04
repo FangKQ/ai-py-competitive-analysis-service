@@ -40,18 +40,22 @@ export interface TraceEntry {
 
 export async function createTask(data: {
   query: string;
+  selfDescription: string;
   competitors: string[];
   industry: string;
   focusAreas: string[];
+  reportDepth: "brief" | "standard";
 }): Promise<Task> {
   const res = await fetch(`${API_BASE}/api/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       query: data.query,
+      self_description: data.selfDescription,
       competitors: data.competitors,
       industry: data.industry,
       focus_areas: data.focusAreas,
+      report_depth: data.reportDepth,
     }),
   });
 
@@ -59,7 +63,12 @@ export async function createTask(data: {
     throw new Error(`Failed to create task: ${res.status}`);
   }
 
-  return res.json();
+  const data_resp = await res.json();
+  // Backend returns task_id, map to id for frontend
+  return {
+    ...data_resp,
+    id: data_resp.task_id || data_resp.id,
+  } as Task;
 }
 
 export async function getTask(taskId: string): Promise<Task> {
