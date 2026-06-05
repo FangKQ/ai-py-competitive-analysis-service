@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import Header from "@/components/Header";
 import TaskForm from "@/components/TaskForm";
 import DAGView from "@/components/DAGView";
@@ -41,6 +42,7 @@ export interface TraceEntry {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function HomePage() {
+  const searchParams = useSearchParams();
   const [appState, setAppState] = useState<AppState>("idle");
   const [taskId, setTaskId] = useState<string | null>(null);
   const [dagNodes, setDagNodes] = useState<DAGNodeInfo[]>([]);
@@ -48,6 +50,13 @@ export default function HomePage() {
   const [report, setReport] = useState<string | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportReady, setReportReady] = useState(false);
+
+  // Auto-open task creation form if ?action=create
+  useEffect(() => {
+    if (searchParams.get("action") === "create") {
+      setAppState("creating");
+    }
+  }, [searchParams]);
 
   const handleStartAnalysis = () => {
     setAppState("creating");

@@ -41,8 +41,19 @@ app.add_middleware(
 
 app.include_router(api_router)
 
+# Agent config routes
+from api.agents import router as agents_router
+app.include_router(agents_router)
+
 data_dir = settings.data_dir
 data_dir.mkdir(parents=True, exist_ok=True)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup."""
+    from agents.config_store import config_store
+    await config_store.init_db()
 
 # Mount landing page static files at /landing only (avoid root catch-all)
 landing_dir = Path(__file__).resolve().parent.parent / "landing"

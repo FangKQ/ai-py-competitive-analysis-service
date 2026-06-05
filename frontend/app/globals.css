@@ -48,6 +48,68 @@ body {
   font-family: var(--font-sans);
 }
 
+/* Global dark scrollbar for all elements */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Hide scrollbar arrows (for older browsers) */
+*::-webkit-scrollbar-button {
+  display: none;
+}
+
+/* Textarea specific - slightly wider for usability */
+textarea::-webkit-scrollbar {
+  width: 8px;
+}
+
+textarea::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 4px;
+}
+
+textarea::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Textarea resize handle - styled */
+textarea {
+  resize: vertical;
+}
+
+textarea::-webkit-resizer {
+  background: linear-gradient(135deg, transparent 60%, #475569 60%, #475569 70%, transparent 70%, transparent 80%, #475569 80%);
+  border-radius: 0 0 8px 0;
+}
+
+/* Select dropdown - override native appearance */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%2394a3b8' viewBox='0 0 16 16'%3E%3Cpath d='M4.646 5.646a.5.5 0 0 1 .708 0L8 8.293l2.646-2.647a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 0-.708z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 16px;
+}
+
 @keyframes node-pulse {
   0%, 100% {
     box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4);
@@ -70,8 +132,9 @@ body {
   animation: fade-in 0.4s ease-out forwards;
 }
 
+/* scrollbar-thin utility - extra thin variant */
 .scrollbar-thin::-webkit-scrollbar {
-  width: 6px;
+  width: 4px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-track {
@@ -80,7 +143,7 @@ body {
 
 .scrollbar-thin::-webkit-scrollbar-thumb {
   background: #334155;
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {

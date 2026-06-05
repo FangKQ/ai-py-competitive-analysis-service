@@ -71,10 +71,21 @@ class CompetitiveAnalysisEngine:
 
         Uses model layering: Analyst/Writer use large model for deep reasoning,
         other roles use small model for speed and cost efficiency.
+        If user config is available (from DB snapshot), override defaults.
         """
-        # Model layering: heavy reasoning = large model, others = small model
-        heavy_roles = {AgentRole.ANALYST, AgentRole.WRITER}
-        model = self.model_large if role in heavy_roles else self.model_small
+        role_key = role.value
+        enabled_tools: list[str] | None = None
+
+        # Check if we have a user config snapshot for this role
+        if hasattr(self, "_config_snapshot") and role_key in self._config_snapshot:
+            cfg = self._config_snapshot[role_key]
+            model = cfg.get("model", self.model_small)
+            prompt = cfg.get("system_prompt", prompt)
+            enabled_tools = cfg.get("enabled_tools")
+        else:
+            # Fallback: model layering based on role
+            heavy_roles = {AgentRole.ANALYST, AgentRole.WRITER}
+            model = self.model_large if role in heavy_roles else self.model_small
 
         agent = BaseAgent(
             role=role,
@@ -86,6 +97,7 @@ class CompetitiveAnalysisEngine:
             governance=self.governance,
             event_bus=self.event_bus,
             node_id=node_id,
+            enabled_tools=enabled_tools,
         )
         self._agents[agent.runtime.agent_id] = agent
         return agent
@@ -285,6 +297,14 @@ class CompetitiveAnalysisEngine:
         """Execute the full Five Looks Three Defines analysis pipeline."""
         start_time = time.time()
         task.status = TaskStatus.RUNNING
+
+        # Snapshot agent configs from DB at task start
+        try:
+            from agents.config_store import config_store
+            all_configs = await config_store.get_all()
+            self._config_snapshot = {cfg["role"]: cfg for cfg in all_configs}
+        except Exception:
+            self._config_snapshot = {}
 
         await self.event_bus.publish(Event(
             "analysis_started", "engine",

@@ -187,7 +187,14 @@ class AgentRuntime:
                 )
                 self.decision_logs.append(log_entry)
 
-                if not has_tool_use or finish_reason == "stop":
+                if not has_tool_use:
+                    # No tool calls - this is the final text response
+                    final_result = text_content
+                    self.status = TaskStatus.COMPLETED
+                    break
+
+                if finish_reason == "stop" and not message.tool_calls:
+                    # Model stopped without tool calls - treat as final
                     final_result = text_content
                     self.status = TaskStatus.COMPLETED
                     break
@@ -282,7 +289,73 @@ class AgentRuntime:
                     break
 
         if self.status != TaskStatus.COMPLETED:
-            self.status = TaskStatus.FAILED
+            # If iterations exhausted but we have tool results, do a final
+            # summarization call without tools to force a text response
+            if self._tool_call_results and final_result is None:
+                try:
+                    summary_kwargs: dict[str, Any] = {
+                        "model": self.model,
+                        "max_completion_tokens": self.max_tokens,
+                        "messages": messages + [
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Based on all the tool results above, "
+                                    "please provide your final comprehensive response now. "
+                                    "Do not call any more tools."
+                                ),
+                            }
+                        ],
+                    }
+                    # No tools passed - force text response
+                    summary_resp = await self.client.chat.completions.create(**summary_kwargs)
+                    summary_msg = summary_resp.choices[0].message
+                    if summary_msg.content:
+                        final_result = summary_msg.content
+                        self.status = TaskStatus.COMPLETED
+                        usage = summary_resp.usage
+                        if usage:
+                            self.total_input_tokens += usage.prompt_tokens or 0
+                            self.total_output_tokens += usage.completion_tokens or 0
+                except Exception as e:
+                    logger.warning(f"[{self.agent_id}] Final summary call failed: {e}")
+
+            if self.status != TaskStatus.COMPLETED:
+                self.status = TaskStatus.FAILED
+
+        # Final safety net: if status is COMPLETED but result is empty,
+        # force a summary call
+        if self.status == TaskStatus.COMPLETED and not final_result and self._tool_call_results:
+            try:
+                summary_kwargs = {
+                    "model": self.model,
+                    "max_completion_tokens": self.max_tokens,
+                    "messages": messages + [
+                        {
+                            "role": "user",
+                            "content": (
+                                "You have completed all tool calls. Now synthesize "
+                                "the collected information into a clear, structured response. "
+                                "Do not call any tools."
+                            ),
+                        }
+                    ],
+                }
+                summary_resp = await self.client.chat.completions.create(**summary_kwargs)
+                summary_msg = summary_resp.choices[0].message
+                if summary_msg.content:
+                    final_result = summary_msg.content
+                    usage = summary_resp.usage
+                    if usage:
+                        self.total_input_tokens += usage.prompt_tokens or 0
+                        self.total_output_tokens += usage.completion_tokens or 0
+            except Exception as e:
+                logger.warning(f"[{self.agent_id}] Safety-net summary call failed: {e}")
+                # As last resort, compile tool results as the response
+                final_result = "\n\n".join(
+                    f"[{r['tool']}] {r['output_summary']}"
+                    for r in self._tool_call_results
+                )
 
         return {
             "result": final_result or "",

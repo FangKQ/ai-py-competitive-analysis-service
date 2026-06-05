@@ -37,6 +37,7 @@ class BaseAgent:
         governance: GovernanceLayer | None = None,
         event_bus: EventBus | None = None,
         node_id: str = "",
+        enabled_tools: list[str] | None = None,
     ):
         self.role = role
         self.system_prompt = system_prompt
@@ -47,6 +48,7 @@ class BaseAgent:
         self.governance = governance or GovernanceLayer()
         self.event_bus = event_bus or EventBus()
         self.node_id = node_id
+        self.enabled_tools = enabled_tools
 
         self.runtime = AgentRuntime(
             role=role,
@@ -66,7 +68,14 @@ class BaseAgent:
         self._collected_urls: list[dict] = []
 
         if self.tools:
-            tool_defs = self.tools.get_tool_definitions_for_role(self.role.value)
+            # Use user-configured enabled_tools if available, otherwise role-based defaults
+            if self.enabled_tools is not None:
+                tool_defs = [
+                    t for t in self.tools.get_tool_definitions()
+                    if t["name"] in self.enabled_tools
+                ]
+            else:
+                tool_defs = self.tools.get_tool_definitions_for_role(self.role.value)
             if not tool_defs:
                 tool_defs = None
             else:
