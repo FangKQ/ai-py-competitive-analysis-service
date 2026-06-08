@@ -26,9 +26,10 @@ _DB_PATH = Path(__file__).resolve().parent.parent / "data" / "agent_configs.db"
 
 # Available models in the system
 AVAILABLE_MODELS = [
-    {"id": "gpt-5.5-2026-04-23", "name": "GPT-5.5", "description": "Most capable model for deep reasoning"},
-    {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "description": "Fast and cost-efficient"},
-    {"id": "gpt-4.1", "name": "GPT-4.1", "description": "Balanced performance and speed"},
+    {"id": "gpt-5.5-2026-04-23", "name": "GPT-5.5", "provider": "openai", "description": "Most capable model for deep reasoning"},
+    {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "provider": "openai", "description": "Fast and cost-efficient"},
+    {"id": "gpt-4.1", "name": "GPT-4.1", "provider": "openai", "description": "Balanced performance and speed"},
+    {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "provider": "anthropic", "description": "Strong reasoning and long-context understanding"},
 ]
 
 # Available tools in the system
@@ -80,6 +81,12 @@ DEFAULT_CONFIGS: dict[str, dict[str, Any]] = {
         "token_budget": 8192,
         "enabled_tools": ["verify_citation", "fetch_webpage"],
     },
+    "arbiter": {
+        "display_name": "仲裁官",
+        "model": "claude-sonnet-4-20250514",
+        "token_budget": 32768,
+        "enabled_tools": [],
+    },
 }
 
 
@@ -92,6 +99,7 @@ def get_default_prompt(role: str) -> str:
         WRITER_PROMPT,
         REVIEWER_PROMPT,
         CITATION_PROMPT,
+        ARBITER_ANALYSIS_PROMPT,
     )
     prompt_map = {
         "orchestrator": ORCHESTRATOR_PROMPT,
@@ -100,6 +108,7 @@ def get_default_prompt(role: str) -> str:
         "writer": WRITER_PROMPT,
         "reviewer": REVIEWER_PROMPT,
         "citation": CITATION_PROMPT,
+        "arbiter": ARBITER_ANALYSIS_PROMPT,
     }
     return prompt_map.get(role, "")
 

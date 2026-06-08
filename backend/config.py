@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     model_large: str = Field(default="gpt-5.5-2026-04-23", env="MODEL_LARGE")
     model_small: str = Field(default="gpt-4.1-mini", env="MODEL_SMALL")
 
+    # Anthropic (Claude)
+    anthropic_api_key: str = Field(default="", env="ANTHROPIC_API_KEY")
+    anthropic_model: str = Field(default="claude-sonnet-4-20250514", env="ANTHROPIC_MODEL")
+
+    # Multi-model strategy
+    cross_validation_enabled: bool = Field(
+        default=True, env="CROSS_VALIDATION_ENABLED",
+    )
+
     # Tavily Search API
     tavily_api_key: str = Field(default="", env="TAVILY_API_KEY")
 

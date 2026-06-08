@@ -33,6 +33,7 @@ const ROLE_CONFIG: Record<string, { color: string; icon: typeof Brain }> = {
   writer: { color: "#10b981", icon: PenTool },
   reviewer: { color: "#ef4444", icon: ShieldCheck },
   citation: { color: "#ec4899", icon: Link2 },
+  arbiter: { color: "#a855f7", icon: Brain },
 };
 
 function AgentNode({ data }: { data: { label: string; role: string; status: NodeStatus } }) {
@@ -93,7 +94,9 @@ export default function DAGView({ nodes }: DAGViewProps) {
       (n) => n.role !== "collector" && n.role !== "orchestrator"
     );
 
-    // Layout: Orchestrator at left, Collectors in middle column, rest to the right
+    // Detect cross-validation mode by checking for arbiter nodes
+    const hasArbiter = nodes.some((n) => n.role === "arbiter");
+
     const colWidth = 220;
     const rowHeight = 70;
     const collectorStartY = Math.max(0, (collectors.length - 1) * rowHeight * 0.5);
@@ -122,7 +125,6 @@ export default function DAGView({ nodes }: DAGViewProps) {
         data: { label: c.label, role: c.role, status: c.status },
       });
 
-      // Edge from orchestrator to each collector
       if (orchestrator) {
         fEdges.push({
           id: `e-orch-${c.id}`,
@@ -134,26 +136,30 @@ export default function DAGView({ nodes }: DAGViewProps) {
       }
     });
 
-    // Post-collector nodes in sequence
     const postStartX = 50 + colWidth * 2;
     const postY = collectors.length > 0 ? collectorStartY : 100;
 
-    // Define order: analyst → writer → citation → reviewer
-    const orderedRoles = ["analyst", "writer", "citation", "reviewer"];
-    const orderedNodes = orderedRoles
-      .map((role) => postCollector.find((n) => n.role === role))
-      .filter(Boolean) as DAGNodeInfo[];
+    if (hasArbiter) {
+      // Cross-validation layout: parallel branches with arbiter merge points
+      // Order: [analyst_gpt, analyst_claude] → arbiter_analysis → [writer_gpt, writer_claude] → arbiter_report → cite → review
+      const analysts = postCollector.filter((n) => n.role === "analyst");
+      const arbiterAnalysis = postCollector.find((n) => n.role === "arbiter" && n.id.includes("analysis"));
+      const writers = postCollector.filter((n) => n.role === "writer");
+      const arbiterReport = postCollector.find((n) => n.role === "arbiter" && n.id.includes("report"));
+      const citation = postCollector.find((n) => n.role === "citation");
+      const reviewer = postCollector.find((n) => n.role === "reviewer");
 
-    orderedNodes.forEach((n, i) => {
-      fNodes.push({
-        id: n.id,
-        type: "agentNode",
-        position: { x: postStartX + i * colWidth, y: postY },
-        data: { label: n.label, role: n.role, status: n.status },
-      });
-
-      if (i === 0) {
-        // Connect all collectors to analyst
+      // Parallel analysts (vertical split)
+      const parallelOffset = 50;
+      analysts.forEach((n, i) => {
+        const y = postY + (i === 0 ? -parallelOffset : parallelOffset);
+        fNodes.push({
+          id: n.id,
+          type: "agentNode",
+          position: { x: postStartX, y },
+          data: { label: n.label, role: n.role, status: n.status },
+        });
+        // Connect collectors to each analyst
         collectors.forEach((c) => {
           fEdges.push({
             id: `e-${c.id}-${n.id}`,
@@ -163,18 +169,131 @@ export default function DAGView({ nodes }: DAGViewProps) {
             style: { stroke: "#6366f1", strokeWidth: 2 },
           });
         });
-      } else {
-        // Sequential edges between post-collector nodes
-        const prev = orderedNodes[i - 1];
-        fEdges.push({
-          id: `e-${prev.id}-${n.id}`,
-          source: prev.id,
-          target: n.id,
-          animated: n.status === "running",
-          style: { stroke: "#6366f1", strokeWidth: 2 },
+      });
+
+      // Arbiter analysis
+      if (arbiterAnalysis) {
+        fNodes.push({
+          id: arbiterAnalysis.id,
+          type: "agentNode",
+          position: { x: postStartX + colWidth, y: postY },
+          data: { label: arbiterAnalysis.label, role: arbiterAnalysis.role, status: arbiterAnalysis.status },
+        });
+        analysts.forEach((n) => {
+          fEdges.push({
+            id: `e-${n.id}-${arbiterAnalysis.id}`,
+            source: n.id,
+            target: arbiterAnalysis.id,
+            animated: arbiterAnalysis.status === "running",
+            style: { stroke: "#a855f7", strokeWidth: 2 },
+          });
         });
       }
-    });
+
+      // Parallel writers
+      writers.forEach((n, i) => {
+        const y = postY + (i === 0 ? -parallelOffset : parallelOffset);
+        fNodes.push({
+          id: n.id,
+          type: "agentNode",
+          position: { x: postStartX + colWidth * 2, y },
+          data: { label: n.label, role: n.role, status: n.status },
+        });
+        if (arbiterAnalysis) {
+          fEdges.push({
+            id: `e-${arbiterAnalysis.id}-${n.id}`,
+            source: arbiterAnalysis.id,
+            target: n.id,
+            animated: n.status === "running",
+            style: { stroke: "#6366f1", strokeWidth: 2 },
+          });
+        }
+      });
+
+      // Arbiter report
+      if (arbiterReport) {
+        fNodes.push({
+          id: arbiterReport.id,
+          type: "agentNode",
+          position: { x: postStartX + colWidth * 3, y: postY },
+          data: { label: arbiterReport.label, role: arbiterReport.role, status: arbiterReport.status },
+        });
+        writers.forEach((n) => {
+          fEdges.push({
+            id: `e-${n.id}-${arbiterReport.id}`,
+            source: n.id,
+            target: arbiterReport.id,
+            animated: arbiterReport.status === "running",
+            style: { stroke: "#a855f7", strokeWidth: 2 },
+          });
+        });
+      }
+
+      // Citation + Reviewer in sequence after arbiter_report
+      const tailNodes = [citation, reviewer].filter(Boolean) as DAGNodeInfo[];
+      tailNodes.forEach((n, i) => {
+        fNodes.push({
+          id: n.id,
+          type: "agentNode",
+          position: { x: postStartX + colWidth * (4 + i), y: postY },
+          data: { label: n.label, role: n.role, status: n.status },
+        });
+        if (i === 0 && arbiterReport) {
+          fEdges.push({
+            id: `e-${arbiterReport.id}-${n.id}`,
+            source: arbiterReport.id,
+            target: n.id,
+            animated: n.status === "running",
+            style: { stroke: "#6366f1", strokeWidth: 2 },
+          });
+        } else if (i > 0) {
+          const prev = tailNodes[i - 1];
+          fEdges.push({
+            id: `e-${prev.id}-${n.id}`,
+            source: prev.id,
+            target: n.id,
+            animated: n.status === "running",
+            style: { stroke: "#6366f1", strokeWidth: 2 },
+          });
+        }
+      });
+    } else {
+      // Single-model layout (original behavior)
+      const orderedRoles = ["analyst", "writer", "citation", "reviewer"];
+      const orderedNodes = orderedRoles
+        .map((role) => postCollector.find((n) => n.role === role))
+        .filter(Boolean) as DAGNodeInfo[];
+
+      orderedNodes.forEach((n, i) => {
+        fNodes.push({
+          id: n.id,
+          type: "agentNode",
+          position: { x: postStartX + i * colWidth, y: postY },
+          data: { label: n.label, role: n.role, status: n.status },
+        });
+
+        if (i === 0) {
+          collectors.forEach((c) => {
+            fEdges.push({
+              id: `e-${c.id}-${n.id}`,
+              source: c.id,
+              target: n.id,
+              animated: n.status === "running",
+              style: { stroke: "#6366f1", strokeWidth: 2 },
+            });
+          });
+        } else {
+          const prev = orderedNodes[i - 1];
+          fEdges.push({
+            id: `e-${prev.id}-${n.id}`,
+            source: prev.id,
+            target: n.id,
+            animated: n.status === "running",
+            style: { stroke: "#6366f1", strokeWidth: 2 },
+          });
+        }
+      });
+    }
 
     return { flowNodes: fNodes, flowEdges: fEdges };
   }, [nodes]);

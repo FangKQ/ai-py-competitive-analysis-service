@@ -54,13 +54,13 @@ export default function Header() {
           <Settings className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">Agent 工坊</span>
         </Link>
-        <a
-          href="#demo"
+        <Link
+          href="/?action=demo"
           className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-400 hover:text-surface-200 hover:bg-surface-800 rounded-lg transition-colors"
         >
           <Play className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">演示</span>
-        </a>
+        </Link>
         <a
           href="#docs"
           className="flex items-center gap-1.5 px-3 py-2 text-sm text-surface-400 hover:text-surface-200 hover:bg-surface-800 rounded-lg transition-colors"

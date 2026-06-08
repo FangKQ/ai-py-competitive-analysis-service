@@ -23,10 +23,14 @@ from agents.prompts import (
     WRITER_PROMPT,
     REVIEWER_PROMPT,
     CITATION_PROMPT,
+    ARBITER_ANALYSIS_PROMPT,
+    ARBITER_REPORT_PROMPT,
 )
+from agents.arbiter import ArbiterAgent
 from harness.context import SharedMemory
 from harness.capability import ToolRegistry, create_default_tools
 from harness.governance import GovernanceLayer
+from harness.providers import OpenAIProvider, AnthropicProvider, create_openai_provider, create_anthropic_provider
 from harness.surface import DAGOrchestrator, EventBus, Event
 from schemas import (
     AgentRole,
@@ -53,12 +57,16 @@ class CompetitiveAnalysisEngine:
         model_large: str = "",
         model_small: str = "",
         task_id: str = "",
+        anthropic_api_key: str = "",
+        anthropic_model: str = "claude-sonnet-4-20250514",
+        cross_validation_enabled: bool = False,
     ):
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.model_large = model_large or model
         self.model_small = model_small or model
         self.task_id = task_id
+        self.cross_validation_enabled = cross_validation_enabled
         self.shared_memory = SharedMemory()
         self.governance = GovernanceLayer()
         self.event_bus = EventBus()
@@ -66,12 +74,38 @@ class CompetitiveAnalysisEngine:
         self.dag_orchestrator = DAGOrchestrator(event_bus=self.event_bus)
         self._agents: dict[str, BaseAgent] = {}
 
-    def _create_agent(self, role: AgentRole, prompt: str, node_id: str = "") -> BaseAgent:
+        # Provider instances
+        self.openai_provider = create_openai_provider(
+            api_key=api_key,
+            base_url=base_url,
+            model=self.model_large,
+        )
+        self.openai_provider_small = create_openai_provider(
+            api_key=api_key,
+            base_url=base_url,
+            model=self.model_small,
+        )
+
+        # Anthropic provider (for cross-validation and arbiter)
+        self.anthropic_provider = None
+        if anthropic_api_key and cross_validation_enabled:
+            self.anthropic_provider = create_anthropic_provider(
+                api_key=anthropic_api_key,
+                model=anthropic_model,
+            )
+
+    def _create_agent(self, role: AgentRole, prompt: str, node_id: str = "", provider_id: str = "openai") -> BaseAgent:
         """Create an agent with the given role and system prompt.
 
         Uses model layering: Analyst/Writer use large model for deep reasoning,
         other roles use small model for speed and cost efficiency.
         If user config is available (from DB snapshot), override defaults.
+
+        :param role: agent role
+        :param prompt: system prompt
+        :param node_id: DAG node identifier
+        :param provider_id: which provider to use (openai | anthropic)
+        :return: configured BaseAgent instance
         """
         role_key = role.value
         enabled_tools: list[str] | None = None
@@ -87,10 +121,22 @@ class CompetitiveAnalysisEngine:
             heavy_roles = {AgentRole.ANALYST, AgentRole.WRITER}
             model = self.model_large if role in heavy_roles else self.model_small
 
+        # Select provider based on provider_id
+        provider = None
+        if provider_id == "anthropic" and self.anthropic_provider:
+            provider = self.anthropic_provider
+        else:
+            # Default to OpenAI
+            heavy_roles = {AgentRole.ANALYST, AgentRole.WRITER}
+            if role in heavy_roles:
+                provider = self.openai_provider
+            else:
+                provider = self.openai_provider_small
+
         agent = BaseAgent(
             role=role,
             system_prompt=prompt,
-            client=self.client,
+            provider=provider,
             model=model,
             tools=self.tools,
             shared_memory=self.shared_memory,
@@ -162,7 +208,11 @@ class CompetitiveAnalysisEngine:
 
         # For Analyst/Writer, extract 【思考过程】 section if present
         if agent.role.value in ("analyst", "writer"):
-            return self._extract_thinking_section(stripped)
+            thinking = self._extract_thinking_section(stripped)
+            if thinking:
+                return thinking
+            # Fallback: if no thinking section marker, show first 300 chars of output
+            return stripped[:300]
 
         # For other roles with plain text reasoning
         return last_reasoning[:300]
@@ -359,12 +409,24 @@ class CompetitiveAnalysisEngine:
                 "role": "collector",
                 "label": comp,
             })
-        dag_nodes.extend([
-            {"id": "analyze", "role": "analyst", "label": "分析师"},
-            {"id": "write", "role": "writer", "label": "撰写者"},
-            {"id": "cite", "role": "citation", "label": "引用器"},
-            {"id": "review", "role": "reviewer", "label": "审核员"},
-        ])
+        if self.cross_validation_enabled and self.anthropic_provider:
+            dag_nodes.extend([
+                {"id": "analyze_gpt", "role": "analyst", "label": "分析师(GPT)"},
+                {"id": "analyze_claude", "role": "analyst", "label": "分析师(Claude)"},
+                {"id": "arbiter_analysis", "role": "arbiter", "label": "仲裁官(分析)"},
+                {"id": "writer_gpt", "role": "writer", "label": "撰写者(GPT)"},
+                {"id": "writer_claude", "role": "writer", "label": "撰写者(Claude)"},
+                {"id": "arbiter_report", "role": "arbiter", "label": "仲裁官(报告)"},
+                {"id": "cite", "role": "citation", "label": "引用器"},
+                {"id": "review", "role": "reviewer", "label": "审核员"},
+            ])
+        else:
+            dag_nodes.extend([
+                {"id": "analyze", "role": "analyst", "label": "分析师"},
+                {"id": "write", "role": "writer", "label": "撰写者"},
+                {"id": "cite", "role": "citation", "label": "引用器"},
+                {"id": "review", "role": "reviewer", "label": "审核员"},
+            ])
         await self.event_bus.publish(Event(
             "dag_plan", "engine", {"nodes": dag_nodes}
         ))
@@ -484,13 +546,13 @@ class CompetitiveAnalysisEngine:
             "node_started", "analyze",
             {"role": "analyst", "task": "结构化分析"},
         ))
-        analyst = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze")
+
         # Build sources reference for citation chain
         sources_ref = json.dumps(
             collected_data.get("all_sources", [])[:20],
             ensure_ascii=False,
         )
-        analysis_result = await analyst.execute(
+        analyst_task_msg = (
             f"请基于以下数据完成结构化分析。\n\n"
             f"【分析目标】{task.query}\n"
             f"【竞品列表】{', '.join(competitors)}\n"
@@ -501,36 +563,277 @@ class CompetitiveAnalysisEngine:
             f"【竞品数据】\n{json.dumps(collected_data.get('competitors', []), ensure_ascii=False, default=str)[:6000]}\n\n"
             f"【可用引用来源 - 请在 evidence 中使用这些真实 URL】\n{sources_ref}"
         )
-        analysis_text = analysis_result.get("result", "")
-        # Strip thinking section from analysis output
-        analysis_text = self._strip_thinking_section(analysis_text)
+
+        if self.cross_validation_enabled and self.anthropic_provider:
+            # Parallel dual-model analysis + arbiter
+            analyst_gpt = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze_gpt", "openai")
+            analyst_claude = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze_claude", "anthropic")
+
+            await self.event_bus.publish(Event(
+                "node_started", "analyze_gpt",
+                {"role": "analyst", "task": "GPT 结构化分析"},
+            ))
+            await self.event_bus.publish(Event(
+                "node_started", "analyze_claude",
+                {"role": "analyst", "task": "Claude 结构化分析"},
+            ))
+
+            gpt_result, claude_result = await asyncio.gather(
+                analyst_gpt.execute(analyst_task_msg),
+                analyst_claude.execute(analyst_task_msg),
+                return_exceptions=True,
+            )
+
+            gpt_text = gpt_result.get("result", "") if isinstance(gpt_result, dict) else ""
+            claude_text = claude_result.get("result", "") if isinstance(claude_result, dict) else ""
+
+            # Log results for debugging
+            if isinstance(gpt_result, dict):
+                logger.info(f"GPT Analyst: status={gpt_result.get('status')}, result_len={len(gpt_text)}, iterations={gpt_result.get('iterations')}")
+            if isinstance(claude_result, dict):
+                logger.info(f"Claude Analyst: status={claude_result.get('status')}, result_len={len(claude_text)}, iterations={claude_result.get('iterations')}")
+
+            # Handle failures gracefully
+            if isinstance(gpt_result, Exception):
+                logger.error(f"GPT Analyst failed: {gpt_result}")
+                gpt_text = ""
+                await self.event_bus.publish(Event("node_failed", "analyze_gpt", {"error": str(gpt_result)}))
+            elif isinstance(gpt_result, dict) and gpt_result.get("status") == "failed":
+                logger.error(f"GPT Analyst returned failed status")
+                gpt_text = ""
+                await self.event_bus.publish(Event("node_failed", "analyze_gpt", {"error": "agent returned failed status"}))
+            if isinstance(claude_result, Exception):
+                logger.error(f"Claude Analyst failed: {claude_result}")
+                claude_text = ""
+                await self.event_bus.publish(Event("node_failed", "analyze_claude", {"error": str(claude_result)}))
+            elif isinstance(claude_result, dict) and claude_result.get("status") == "failed":
+                logger.error(f"Claude Analyst returned failed status")
+                claude_text = ""
+                await self.event_bus.publish(Event("node_failed", "analyze_claude", {"error": "agent returned failed status"}))
+
+            # If both failed, fallback to single model
+            if not gpt_text and not claude_text:
+                logger.warning("Both analysts failed, falling back to single-model")
+                await self.event_bus.publish(Event("node_failed", "analyze_gpt", {"error": "fallback triggered"}))
+                await self.event_bus.publish(Event("node_failed", "analyze_claude", {"error": "fallback triggered"}))
+                analyst_fallback = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze", "openai")
+                fallback_result = await analyst_fallback.execute(analyst_task_msg)
+                analysis_text = fallback_result.get("result", "")
+                analysis_text = self._strip_thinking_section(analysis_text)
+                await self._publish_node_trace("analyze", "分析师(fallback)", analyst_fallback)
+            elif not claude_text:
+                # Only GPT succeeded, skip arbiter
+                analysis_text = gpt_text
+                await self.event_bus.publish(Event("node_completed", "analyze_gpt", {"summary": "GPT 分析完成"}))
+                await self._publish_node_trace("analyze_gpt", "分析师(GPT)", analyst_gpt)
+                # Mark arbiter as skipped
+                await self.event_bus.publish(Event("node_completed", "arbiter_analysis", {"summary": "仲裁跳过(仅GPT成功)"}))
+            elif not gpt_text:
+                # Only Claude succeeded, skip arbiter
+                analysis_text = claude_text
+                await self.event_bus.publish(Event("node_completed", "analyze_claude", {"summary": "Claude 分析完成"}))
+                await self._publish_node_trace("analyze_claude", "分析师(Claude)", analyst_claude)
+                # Mark arbiter as skipped
+                await self.event_bus.publish(Event("node_completed", "arbiter_analysis", {"summary": "仲裁跳过(仅Claude成功)"}))
+            else:
+                # Both succeeded - run arbiter
+                gpt_text = self._strip_thinking_section(gpt_text)
+                claude_text = self._strip_thinking_section(claude_text)
+
+                await self.event_bus.publish(Event("node_completed", "analyze_gpt", {"summary": "GPT 分析完成"}))
+                await self.event_bus.publish(Event("node_completed", "analyze_claude", {"summary": "Claude 分析完成"}))
+                await self._publish_node_trace("analyze_gpt", "分析师(GPT)", analyst_gpt)
+                await self._publish_node_trace("analyze_claude", "分析师(Claude)", analyst_claude)
+
+                # Arbiter fusion
+                await self.event_bus.publish(Event(
+                    "node_started", "arbiter_analysis",
+                    {"role": "arbiter", "task": "仲裁融合分析结果"},
+                ))
+                arbiter = ArbiterAgent(
+                    provider=self.anthropic_provider,
+                    system_prompt=ARBITER_ANALYSIS_PROMPT,
+                    event_bus=self.event_bus,
+                    node_id="arbiter_analysis",
+                )
+                arbiter_result = await arbiter.execute(
+                    result_a=gpt_text,
+                    result_b=claude_text,
+                    label_a="GPT",
+                    label_b="Claude",
+                )
+                analysis_text = arbiter_result.get("result", "")
+                logger.info(
+                    f"Arbiter analysis result: status={arbiter_result.get('status')}, "
+                    f"result_len={len(analysis_text)}"
+                )
+                # Publish trace for arbiter
+                await self.event_bus.publish(Event(
+                    "node_trace", "arbiter_analysis",
+                    {
+                        "role": "arbiter",
+                        "label": "仲裁官(分析)",
+                        "reasoning": analysis_text[:500] if analysis_text else "仲裁结果为空",
+                        "tool_calls": [],
+                        "input_tokens": arbiter_result.get("total_input_tokens", 0),
+                        "output_tokens": arbiter_result.get("total_output_tokens", 0),
+                        "duration_ms": 0,
+                    },
+                ))
+                await self.event_bus.publish(Event(
+                    "node_completed", "arbiter_analysis",
+                    {"summary": "仲裁融合分析完成"},
+                ))
+        else:
+            # Single model path
+            analyst = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze")
+            analysis_result = await analyst.execute(analyst_task_msg)
+            analysis_text = analysis_result.get("result", "")
+            analysis_text = self._strip_thinking_section(analysis_text)
+            await self._publish_node_trace("analyze", "分析师", analyst)
+
         self.shared_memory.write("analysis_result", analysis_text, "analyst")
         await self.event_bus.publish(Event(
             "node_completed", "analyze", {"summary": "结构化分析完成"}
         ))
-        await self._publish_node_trace("analyze", "分析师", analyst)
 
         # ─── Phase 4: Writer - Generate report ────────────────────────────
         await self.event_bus.publish(Event(
             "node_started", "write",
             {"role": "writer", "task": "撰写竞品报告"},
         ))
-        writer = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "write")
-        report_result = await writer.execute(
+
+        writer_task_msg = (
             f"请基于以下分析结果撰写竞品报告。\n\n"
             f"【分析目标】{task.query}\n"
             f"【报告篇幅】{report_depth}\n"
             f"【自身情况】{self_description}\n\n"
             f"【分析结果】\n{analysis_text[:10000]}"
         )
-        draft_report = report_result.get("result", "")
-        # Strip thinking section from report output
-        draft_report = self._strip_thinking_section(draft_report)
+
+        if self.cross_validation_enabled and self.anthropic_provider:
+            # Parallel dual-model writing + arbiter
+            writer_gpt = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "writer_gpt", "openai")
+            writer_claude = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "writer_claude", "anthropic")
+
+            await self.event_bus.publish(Event(
+                "node_started", "writer_gpt",
+                {"role": "writer", "task": "GPT 撰写报告"},
+            ))
+            await self.event_bus.publish(Event(
+                "node_started", "writer_claude",
+                {"role": "writer", "task": "Claude 撰写报告"},
+            ))
+
+            gpt_report, claude_report = await asyncio.gather(
+                writer_gpt.execute(writer_task_msg),
+                writer_claude.execute(writer_task_msg),
+                return_exceptions=True,
+            )
+
+            gpt_report_text = gpt_report.get("result", "") if isinstance(gpt_report, dict) else ""
+            claude_report_text = claude_report.get("result", "") if isinstance(claude_report, dict) else ""
+
+            # Handle failures gracefully
+            if isinstance(gpt_report, Exception):
+                logger.error(f"GPT Writer failed: {gpt_report}")
+                gpt_report_text = ""
+                await self.event_bus.publish(Event("node_failed", "writer_gpt", {"error": str(gpt_report)}))
+            if isinstance(claude_report, Exception):
+                logger.error(f"Claude Writer failed: {claude_report}")
+                claude_report_text = ""
+                await self.event_bus.publish(Event("node_failed", "writer_claude", {"error": str(claude_report)}))
+
+            # Fallback logic
+            if not gpt_report_text and not claude_report_text:
+                logger.warning("Both writers failed, falling back to single-model")
+                await self.event_bus.publish(Event("node_failed", "writer_gpt", {"error": "fallback triggered"}))
+                await self.event_bus.publish(Event("node_failed", "writer_claude", {"error": "fallback triggered"}))
+                writer_fallback = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "write", "openai")
+                fallback_result = await writer_fallback.execute(writer_task_msg)
+                draft_report = fallback_result.get("result", "")
+                draft_report = self._strip_thinking_section(draft_report)
+                await self._publish_node_trace("write", "撰写者(fallback)", writer_fallback)
+            elif not claude_report_text:
+                # Only GPT succeeded
+                draft_report = self._strip_thinking_section(gpt_report_text)
+                await self.event_bus.publish(Event("node_completed", "writer_gpt", {"summary": "GPT 报告完成"}))
+                await self._publish_node_trace("writer_gpt", "撰写者(GPT)", writer_gpt)
+                await self.event_bus.publish(Event("node_completed", "arbiter_report", {"summary": "仲裁跳过(仅GPT成功)"}))
+            elif not gpt_report_text:
+                # Only Claude succeeded
+                draft_report = self._strip_thinking_section(claude_report_text)
+                await self.event_bus.publish(Event("node_completed", "writer_claude", {"summary": "Claude 报告完成"}))
+                await self._publish_node_trace("writer_claude", "撰写者(Claude)", writer_claude)
+                await self.event_bus.publish(Event("node_completed", "arbiter_report", {"summary": "仲裁跳过(仅Claude成功)"}))
+            else:
+                # Both succeeded - run arbiter
+                gpt_report_text = self._strip_thinking_section(gpt_report_text)
+                claude_report_text = self._strip_thinking_section(claude_report_text)
+
+                await self.event_bus.publish(Event("node_completed", "writer_gpt", {"summary": "GPT 报告完成"}))
+                await self.event_bus.publish(Event("node_completed", "writer_claude", {"summary": "Claude 报告完成"}))
+                await self._publish_node_trace("writer_gpt", "撰写者(GPT)", writer_gpt)
+                await self._publish_node_trace("writer_claude", "撰写者(Claude)", writer_claude)
+
+                # Arbiter fusion for report
+                await self.event_bus.publish(Event(
+                    "node_started", "arbiter_report",
+                    {"role": "arbiter", "task": "仲裁融合报告"},
+                ))
+                report_arbiter = ArbiterAgent(
+                    provider=self.anthropic_provider,
+                    system_prompt=ARBITER_REPORT_PROMPT,
+                    event_bus=self.event_bus,
+                    node_id="arbiter_report",
+                )
+                arbiter_report_result = await report_arbiter.execute(
+                    result_a=gpt_report_text,
+                    result_b=claude_report_text,
+                    label_a="GPT Writer",
+                    label_b="Claude Writer",
+                )
+                draft_report = arbiter_report_result.get("result", "")
+                logger.info(
+                    f"Arbiter report result: status={arbiter_report_result.get('status')}, "
+                    f"result_len={len(draft_report)}, "
+                    f"tokens_in={arbiter_report_result.get('total_input_tokens', 0)}, "
+                    f"tokens_out={arbiter_report_result.get('total_output_tokens', 0)}"
+                )
+
+                # Fallback: if arbiter produced empty result, use the longer report
+                if not draft_report.strip():
+                    logger.warning("Arbiter report returned empty, using longer individual report as fallback")
+                    draft_report = gpt_report_text if len(gpt_report_text) >= len(claude_report_text) else claude_report_text
+                # Publish trace for arbiter
+                await self.event_bus.publish(Event(
+                    "node_trace", "arbiter_report",
+                    {
+                        "role": "arbiter",
+                        "label": "仲裁官(报告)",
+                        "reasoning": draft_report[:500] if draft_report else "仲裁结果为空",
+                        "tool_calls": [],
+                        "input_tokens": arbiter_report_result.get("total_input_tokens", 0),
+                        "output_tokens": arbiter_report_result.get("total_output_tokens", 0),
+                        "duration_ms": 0,
+                    },
+                ))
+                await self.event_bus.publish(Event(
+                    "node_completed", "arbiter_report",
+                    {"summary": "仲裁融合报告完成"},
+                ))
+        else:
+            # Single model path
+            writer = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "write")
+            report_result = await writer.execute(writer_task_msg)
+            draft_report = report_result.get("result", "")
+            draft_report = self._strip_thinking_section(draft_report)
+            await self._publish_node_trace("write", "撰写者", writer)
+
         self.shared_memory.write("draft_report", draft_report, "writer")
         await self.event_bus.publish(Event(
             "node_completed", "write", {"summary": "报告草稿完成"}
         ))
-        await self._publish_node_trace("write", "撰写者", writer)
 
         # ─── Phase 5: Citation verification ───────────────────────────────
         await self.event_bus.publish(Event(

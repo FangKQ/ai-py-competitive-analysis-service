@@ -1,12 +1,21 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Harness Layer 1: Runtime - Agent Loop 状态机 + 错误恢复 + 棘轮机制
+@Time    : 2025-06-03
+@Author  : Competitive Analysis Agent Team
+@File    : runtime.py
+@Desc    : Harness Layer 1: Runtime - Agent Loop state machine + error recovery + ratchet
 
-参考：
-- Claude Code ReAct Loop: 观察→思考→执行→验证→循环
-- Harness Engineering (arxiv 2604.21003): Worker Agent 执行 + 棘轮约束
+Reference:
+- Claude Code ReAct Loop: observe → think → act → verify → loop
+- Harness Engineering (arxiv 2604.21003): Worker Agent execution + ratchet constraints
 - Anthropic "Building Effective Agents": Agent = while loop + LLM + tools
 """
-from __future__ import annotations
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
 import json
@@ -14,9 +23,9 @@ import time
 import uuid
 import logging
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
-from openai import AsyncOpenAI
+from harness.providers import LLMProvider, OpenAIProvider, AnthropicProvider, ProviderResponse
 
 from schemas import (
     AgentDecisionLog,
@@ -28,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 class RatchetRule:
-    """棘轮规则 - 错误永久转化为约束，防止重复犯错"""
+    """Ratchet rule - permanently convert errors into constraints to prevent repeated mistakes."""
 
     def __init__(self, trigger: str, constraint: str):
         self.trigger = trigger
@@ -39,13 +48,13 @@ class RatchetRule:
 
 class AgentRuntime:
     """
-    Agent Loop 运行时 - 核心 ReAct 循环
+    Agent Loop Runtime - Core ReAct cycle
 
-    实现 Claude Code 风格的 Agent Loop:
-    1. Observe: 收集当前状态与上下文
-    2. Think: LLM 推理下一步
-    3. Act: 执行工具调用
-    4. Verify: 检查结果质量
+    Implements Claude Code style Agent Loop:
+    1. Observe: collect current state and context
+    2. Think: LLM reasons about next step
+    3. Act: execute tool calls
+    4. Verify: check result quality
     5. Loop / Exit
     """
 
@@ -53,17 +62,44 @@ class AgentRuntime:
         self,
         agent_id: str | None = None,
         role: AgentRole = AgentRole.ORCHESTRATOR,
-        client: AsyncOpenAI | None = None,
+        provider: Union[OpenAIProvider, AnthropicProvider, None] = None,
+        client: Any = None,
         model: str = "gpt-5.5-2026-04-23",
         max_iterations: int = 20,
         max_tokens: int = 8192,
     ):
+        """
+        Initialize AgentRuntime.
+
+        :param agent_id: unique agent identifier
+        :param role: agent role enum
+        :param provider: LLM provider instance (preferred)
+        :param client: legacy AsyncOpenAI client (backward compatibility)
+        :param model: model identifier (used with legacy client)
+        :param max_iterations: maximum ReAct loop iterations
+        :param max_tokens: max completion tokens per call
+        """
         self.agent_id = agent_id or f"{role.value}_{uuid.uuid4().hex[:6]}"
         self.role = role
-        self.client = client
         self.model = model
         self.max_iterations = max_iterations
         self.max_tokens = max_tokens
+
+        # Support both new Provider interface and legacy client
+        if provider is not None:
+            self.provider = provider
+        elif client is not None:
+            # Legacy path: wrap AsyncOpenAI client in OpenAIProvider
+            from harness.providers import OpenAIProvider
+            self.provider = OpenAIProvider(
+                api_key=client.api_key or "",
+                base_url=str(client.base_url) if client.base_url else "https://api.openai.com/v1",
+                model=model,
+            )
+            # Reuse the existing client instance
+            self.provider.client = client
+        else:
+            self.provider = None
 
         self.status = TaskStatus.PENDING
         self.ratchet_rules: list[RatchetRule] = []
@@ -72,7 +108,12 @@ class AgentRuntime:
         self.total_output_tokens = 0
 
     def add_ratchet_rule(self, trigger: str, constraint: str) -> None:
-        """棘轮：将错误模式转化为永久约束"""
+        """
+        Ratchet: convert error patterns into permanent constraints.
+
+        :param trigger: error pattern that triggered this rule
+        :param constraint: constraint text to inject into prompt
+        """
         rule = RatchetRule(trigger=trigger, constraint=constraint)
         self.ratchet_rules.append(rule)
         logger.info(
@@ -80,7 +121,11 @@ class AgentRuntime:
         )
 
     def get_ratchet_constraints(self) -> str:
-        """获取所有棘轮约束的提示文本"""
+        """
+        Get all ratchet constraints as prompt text.
+
+        :return: formatted constraint string
+        """
         if not self.ratchet_rules:
             return ""
         constraints = "\n".join(
@@ -100,35 +145,23 @@ class AgentRuntime:
         on_tool_call: Any = None,
     ) -> dict:
         """
-        执行 Agent Loop - ReAct 循环 (OpenAI Chat Completions API)
+        Execute Agent Loop - ReAct cycle.
 
-        Args:
-            on_tool_call: Optional async callback(tool_name, input, output, status)
-                          called in real-time after each tool execution.
-
-        Returns:
-            dict with keys: result, decision_logs, tokens_used
+        :param system_prompt: system prompt for the agent
+        :param user_message: user/task message
+        :param tools: tool definitions
+        :param tool_executor: async callable for tool execution
+        :param on_tool_call: optional async callback(tool_name, input, output, status)
+        :return: dict with keys: result, decision_logs, tokens_used, etc.
         """
+        if self.provider is None:
+            raise RuntimeError("No LLM provider configured for AgentRuntime")
+
         self.status = TaskStatus.RUNNING
         self._tool_call_results: list[dict] = []
-        messages = [
-            {"role": "system", "content": system_prompt + self.get_ratchet_constraints()},
-            {"role": "user", "content": user_message},
-        ]
 
-        # Convert Anthropic-style tool defs to OpenAI function calling format
-        openai_tools = None
-        if tools:
-            openai_tools = []
-            for t in tools:
-                openai_tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": t["name"],
-                        "description": t.get("description", ""),
-                        "parameters": t.get("input_schema", {"type": "object", "properties": {}}),
-                    },
-                })
+        full_system_prompt = system_prompt + self.get_ratchet_constraints()
+        messages = [{"role": "user", "content": user_message}]
 
         iteration = 0
         final_result = None
@@ -138,85 +171,57 @@ class AgentRuntime:
             start_time = time.time()
 
             try:
-                kwargs: dict[str, Any] = {
-                    "model": self.model,
-                    "max_completion_tokens": self.max_tokens,
-                    "messages": messages,
-                }
-                if openai_tools:
-                    kwargs["tools"] = openai_tools
-
-                response = await self.client.chat.completions.create(**kwargs)
+                response = await self.provider.chat(
+                    system_prompt=full_system_prompt,
+                    messages=messages,
+                    tools=tools,
+                    max_tokens=self.max_tokens,
+                )
 
                 duration_ms = int((time.time() - start_time) * 1000)
-                usage = response.usage
-                input_tokens = usage.prompt_tokens if usage else 0
-                output_tokens = usage.completion_tokens if usage else 0
-                self.total_input_tokens += input_tokens
-                self.total_output_tokens += output_tokens
+                self.total_input_tokens += response.input_tokens
+                self.total_output_tokens += response.output_tokens
 
-                choice = response.choices[0]
-                message = choice.message
-                finish_reason = choice.finish_reason
-
-                tool_calls = []
-                text_content = message.content or ""
-                has_tool_use = bool(message.tool_calls)
-
-                if message.tool_calls:
-                    for tc in message.tool_calls:
-                        tool_calls.append({
-                            "id": tc.id,
-                            "name": tc.function.name,
-                            "input": json.loads(tc.function.arguments) if tc.function.arguments else {},
-                        })
+                has_tool_use = bool(response.tool_calls)
 
                 log_entry = AgentDecisionLog(
                     agent_id=self.agent_id,
                     agent_role=self.role,
                     action=f"iteration_{iteration}",
-                    reasoning=text_content[:2000],
-                    tool_calls=tool_calls,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
+                    reasoning=response.content[:2000],
+                    tool_calls=response.tool_calls,
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
                     duration_ms=duration_ms,
                     result_summary=(
                         f"{'tool_use' if has_tool_use else 'text_response'}"
-                        f" | finish={finish_reason}"
+                        f" | finish={response.finish_reason}"
                     ),
                 )
                 self.decision_logs.append(log_entry)
 
                 if not has_tool_use:
-                    # No tool calls - this is the final text response
-                    final_result = text_content
+                    final_result = response.content
                     self.status = TaskStatus.COMPLETED
                     break
 
-                if finish_reason == "stop" and not message.tool_calls:
-                    # Model stopped without tool calls - treat as final
-                    final_result = text_content
-                    self.status = TaskStatus.COMPLETED
-                    break
-
-                # Append assistant message with tool calls
-                messages.append(message.model_dump())
+                # Append assistant message with tool calls to conversation
+                assistant_msg = self.provider.build_assistant_message(response)
+                messages.append(assistant_msg)
 
                 # Execute tool calls and append results
-                for tc in message.tool_calls:
-                    tc_name = tc.function.name
-                    tc_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                for tc in response.tool_calls:
+                    tc_name = tc["name"]
+                    tc_args = tc["input"]
+                    tc_id = tc["id"]
 
                     if tool_executor:
                         try:
                             result = await tool_executor(tc_name, tc_args)
                             result_str = str(result)
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.id,
-                                "content": result_str,
-                            })
-                            # Real-time callback for tool call success
+                            tool_msg = self.provider.build_tool_result_message(tc_id, result_str)
+                            messages.append(tool_msg)
+
                             if on_tool_call:
                                 await on_tool_call(
                                     tc_name,
@@ -224,7 +229,6 @@ class AgentRuntime:
                                     result_str[:200],
                                     "success",
                                 )
-                            # Track in tool_call_results
                             self._tool_call_results.append({
                                 "tool": tc_name,
                                 "input": str(tc_args)[:200],
@@ -233,12 +237,9 @@ class AgentRuntime:
                             })
                         except Exception as e:
                             error_msg = f"Tool error: {e}"
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.id,
-                                "content": error_msg,
-                            })
-                            # Real-time callback for tool call failure
+                            tool_msg = self.provider.build_tool_result_message(tc_id, error_msg)
+                            messages.append(tool_msg)
+
                             if on_tool_call:
                                 await on_tool_call(
                                     tc_name,
@@ -260,11 +261,8 @@ class AgentRuntime:
                                 ),
                             )
                     else:
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "content": "Tool execution not available",
-                        })
+                        tool_msg = self.provider.build_tool_result_message(tc_id, "Tool execution not available")
+                        messages.append(tool_msg)
 
             except Exception as e:
                 logger.error(
@@ -293,65 +291,58 @@ class AgentRuntime:
             # summarization call without tools to force a text response
             if self._tool_call_results and final_result is None:
                 try:
-                    summary_kwargs: dict[str, Any] = {
-                        "model": self.model,
-                        "max_completion_tokens": self.max_tokens,
-                        "messages": messages + [
-                            {
-                                "role": "user",
-                                "content": (
-                                    "Based on all the tool results above, "
-                                    "please provide your final comprehensive response now. "
-                                    "Do not call any more tools."
-                                ),
-                            }
-                        ],
-                    }
-                    # No tools passed - force text response
-                    summary_resp = await self.client.chat.completions.create(**summary_kwargs)
-                    summary_msg = summary_resp.choices[0].message
-                    if summary_msg.content:
-                        final_result = summary_msg.content
+                    summary_messages = messages + [
+                        {
+                            "role": "user",
+                            "content": (
+                                "Based on all the tool results above, "
+                                "please provide your final comprehensive response now. "
+                                "Do not call any more tools."
+                            ),
+                        }
+                    ]
+                    summary_resp = await self.provider.chat(
+                        system_prompt=full_system_prompt,
+                        messages=summary_messages,
+                        tools=None,
+                        max_tokens=self.max_tokens,
+                    )
+                    if summary_resp.content:
+                        final_result = summary_resp.content
                         self.status = TaskStatus.COMPLETED
-                        usage = summary_resp.usage
-                        if usage:
-                            self.total_input_tokens += usage.prompt_tokens or 0
-                            self.total_output_tokens += usage.completion_tokens or 0
+                        self.total_input_tokens += summary_resp.input_tokens
+                        self.total_output_tokens += summary_resp.output_tokens
                 except Exception as e:
                     logger.warning(f"[{self.agent_id}] Final summary call failed: {e}")
 
             if self.status != TaskStatus.COMPLETED:
                 self.status = TaskStatus.FAILED
 
-        # Final safety net: if status is COMPLETED but result is empty,
-        # force a summary call
+        # Final safety net: if status is COMPLETED but result is empty
         if self.status == TaskStatus.COMPLETED and not final_result and self._tool_call_results:
             try:
-                summary_kwargs = {
-                    "model": self.model,
-                    "max_completion_tokens": self.max_tokens,
-                    "messages": messages + [
-                        {
-                            "role": "user",
-                            "content": (
-                                "You have completed all tool calls. Now synthesize "
-                                "the collected information into a clear, structured response. "
-                                "Do not call any tools."
-                            ),
-                        }
-                    ],
-                }
-                summary_resp = await self.client.chat.completions.create(**summary_kwargs)
-                summary_msg = summary_resp.choices[0].message
-                if summary_msg.content:
-                    final_result = summary_msg.content
-                    usage = summary_resp.usage
-                    if usage:
-                        self.total_input_tokens += usage.prompt_tokens or 0
-                        self.total_output_tokens += usage.completion_tokens or 0
+                summary_messages = messages + [
+                    {
+                        "role": "user",
+                        "content": (
+                            "You have completed all tool calls. Now synthesize "
+                            "the collected information into a clear, structured response. "
+                            "Do not call any tools."
+                        ),
+                    }
+                ]
+                summary_resp = await self.provider.chat(
+                    system_prompt=full_system_prompt,
+                    messages=summary_messages,
+                    tools=None,
+                    max_tokens=self.max_tokens,
+                )
+                if summary_resp.content:
+                    final_result = summary_resp.content
+                    self.total_input_tokens += summary_resp.input_tokens
+                    self.total_output_tokens += summary_resp.output_tokens
             except Exception as e:
                 logger.warning(f"[{self.agent_id}] Safety-net summary call failed: {e}")
-                # As last resort, compile tool results as the response
                 final_result = "\n\n".join(
                     f"[{r['tool']}] {r['output_summary']}"
                     for r in self._tool_call_results

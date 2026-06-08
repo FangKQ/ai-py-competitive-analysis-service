@@ -1,18 +1,26 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Agent 基类 - 所有专职 Agent 的统一接口
+@Time    : 2025-06-03
+@Author  : Competitive Analysis Agent Team
+@File    : base.py
+@Desc    : Agent base class - unified interface for all specialist Agents
 
-参考：
-- Claude Code 架构: Lead Agent + Specialist Agents + Shared Task System
+Reference:
+- Claude Code architecture: Lead Agent + Specialist Agents + Shared Task System
 - Harness Engineering: Agent = Model + Harness
 """
-from __future__ import annotations
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
-from openai import AsyncOpenAI
-
+from harness.providers import OpenAIProvider, AnthropicProvider
 from harness.runtime import AgentRuntime
 from harness.context import SharedMemory
 from harness.capability import ToolRegistry
@@ -24,13 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 class BaseAgent:
-    """Agent 基类 - 整合 Harness 五层"""
+    """Agent base class - integrates Harness five layers."""
 
     def __init__(
         self,
         role: AgentRole,
         system_prompt: str,
-        client: AsyncOpenAI,
+        provider: Union[OpenAIProvider, AnthropicProvider, None] = None,
+        client: Any = None,
         model: str = "gpt-4o-mini",
         tools: ToolRegistry | None = None,
         shared_memory: SharedMemory | None = None,
@@ -39,9 +48,24 @@ class BaseAgent:
         node_id: str = "",
         enabled_tools: list[str] | None = None,
     ):
+        """
+        Initialize BaseAgent.
+
+        :param role: agent role enum
+        :param system_prompt: system prompt for this agent
+        :param provider: LLM provider (preferred)
+        :param client: legacy AsyncOpenAI client (backward compatibility)
+        :param model: model identifier (used with legacy client)
+        :param tools: tool registry
+        :param shared_memory: shared memory for inter-agent communication
+        :param governance: governance layer for permissions and budgets
+        :param event_bus: event bus for observability
+        :param node_id: DAG node identifier
+        :param enabled_tools: list of enabled tool names for this agent
+        """
         self.role = role
         self.system_prompt = system_prompt
-        self.client = client
+        self.provider = provider
         self.model = model
         self.tools = tools
         self.shared_memory = shared_memory or SharedMemory()
@@ -52,6 +76,7 @@ class BaseAgent:
 
         self.runtime = AgentRuntime(
             role=role,
+            provider=provider,
             client=client,
             model=model,
         )
@@ -59,16 +84,20 @@ class BaseAgent:
     async def execute(
         self, task_description: str, context: dict | None = None
     ) -> dict:
-        """执行 Agent 任务"""
+        """
+        Execute Agent task.
+
+        :param task_description: task description
+        :param context: optional additional context
+        :return: execution result dict
+        """
         enriched_prompt = self._build_prompt(context)
 
         tool_defs = None
         tool_executor = None
-        # Collect URLs from web_search results for citation chain
         self._collected_urls: list[dict] = []
 
         if self.tools:
-            # Use user-configured enabled_tools if available, otherwise role-based defaults
             if self.enabled_tools is not None:
                 tool_defs = [
                     t for t in self.tools.get_tool_definitions()
@@ -86,7 +115,6 @@ class BaseAgent:
                         ):
                             return f"Permission denied: {self.role.value} cannot use {name}"
                     result = await self.tools.execute(name, params)
-                    # Auto-collect URLs from web_search results
                     if name == "web_search":
                         self._extract_urls_from_search(result)
                     elif name == "fetch_webpage":
@@ -105,7 +133,6 @@ class BaseAgent:
             )
         )
 
-        # Real-time tool call event callback
         async def _on_tool_call(
             tool_name: str, tool_input: str, tool_output: str, status: str
         ) -> None:
@@ -163,14 +190,17 @@ class BaseAgent:
             )
         )
 
-        # Attach collected URLs to result for downstream citation chain
         if hasattr(self, "_collected_urls") and self._collected_urls:
             result["collected_urls"] = self._collected_urls
 
         return result
 
     def _extract_urls_from_search(self, search_result: str) -> None:
-        """Extract URLs from web_search JSON result and store for citation chain."""
+        """
+        Extract URLs from web_search JSON result and store for citation chain.
+
+        :param search_result: JSON string from web_search tool
+        """
         try:
             data = json.loads(search_result)
             if isinstance(data, list):
@@ -186,7 +216,12 @@ class BaseAgent:
             pass
 
     def _build_prompt(self, context: dict | None = None) -> str:
-        """构建增强后的系统提示"""
+        """
+        Build enriched system prompt.
+
+        :param context: optional additional context
+        :return: full system prompt string
+        """
         parts = [self.system_prompt]
 
         if self.shared_memory:

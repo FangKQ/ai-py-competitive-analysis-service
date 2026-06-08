@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import TaskForm from "@/components/TaskForm";
 import DAGView from "@/components/DAGView";
@@ -43,6 +43,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export default function HomePage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [appState, setAppState] = useState<AppState>("idle");
   const [taskId, setTaskId] = useState<string | null>(null);
   const [dagNodes, setDagNodes] = useState<DAGNodeInfo[]>([]);
@@ -242,8 +243,12 @@ export default function HomePage() {
       { id: "collect_customer", role: "collector", label: "市场/客户采集", status: "idle" },
       { id: "collect_competitor_0", role: "collector", label: "GitHub Copilot", status: "idle" },
       { id: "collect_competitor_1", role: "collector", label: "Cursor", status: "idle" },
-      { id: "analyze", role: "analyst", label: "分析师", status: "idle" },
-      { id: "write", role: "writer", label: "撰写者", status: "idle" },
+      { id: "analyze_gpt", role: "analyst", label: "分析师(GPT)", status: "idle" },
+      { id: "analyze_claude", role: "analyst", label: "分析师(Claude)", status: "idle" },
+      { id: "arbiter_analysis", role: "arbiter", label: "仲裁官(分析)", status: "idle" },
+      { id: "writer_gpt", role: "writer", label: "撰写者(GPT)", status: "idle" },
+      { id: "writer_claude", role: "writer", label: "撰写者(Claude)", status: "idle" },
+      { id: "arbiter_report", role: "arbiter", label: "仲裁官(报告)", status: "idle" },
       { id: "cite", role: "citation", label: "引用器", status: "idle" },
       { id: "review", role: "reviewer", label: "审核员", status: "idle" },
     ]);
@@ -253,10 +258,14 @@ export default function HomePage() {
       { id: "collect_customer", delay: 1500 },
       { id: "collect_competitor_0", delay: 2000 },
       { id: "collect_competitor_1", delay: 2500 },
-      { id: "analyze", delay: 5000 },
-      { id: "write", delay: 7000 },
-      { id: "cite", delay: 9000 },
-      { id: "review", delay: 10500 },
+      { id: "analyze_gpt", delay: 4500 },
+      { id: "analyze_claude", delay: 4800 },
+      { id: "arbiter_analysis", delay: 7500 },
+      { id: "writer_gpt", delay: 9000 },
+      { id: "writer_claude", delay: 9300 },
+      { id: "arbiter_report", delay: 12000 },
+      { id: "cite", delay: 14000 },
+      { id: "review", delay: 15500 },
     ];
 
     sequence.forEach(({ id, delay }) => {
@@ -265,16 +274,25 @@ export default function HomePage() {
       }, delay);
       setTimeout(() => {
         setDagNodes((prev) => prev.map((n) => (n.id === id ? { ...n, status: "completed" } : n)));
+        const roleLabel = id.includes("arbiter") ? "arbiter" :
+          id.includes("analyze") ? "analyst" :
+          id.includes("writer") ? "writer" :
+          id.includes("collect") ? "collector" :
+          id.includes("cite") ? "citation" : "reviewer";
         setTraces((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
             nodeId: id,
             label: id,
-            role: "demo",
+            role: roleLabel,
             action: `${id} 完成`,
-            reasoning: "Demo 模式模拟执行",
-            toolCalls: [{ tool: "web_search", input: "demo query", output_summary: "Demo 结果", status: "success" }],
+            reasoning: id.includes("arbiter")
+              ? "对比两个模型的分析结果，共识结论直接采纳，冲突项按证据强度择优"
+              : "Demo 模式模拟执行",
+            toolCalls: id.includes("collect")
+              ? [{ tool: "web_search", input: "demo query", output_summary: "获取 5 条搜索结果", status: "success" }]
+              : [],
             tokens: Math.floor(Math.random() * 3000) + 500,
             duration: Math.floor(Math.random() * 5000) + 2000,
             timestamp: new Date().toISOString(),
@@ -287,12 +305,21 @@ export default function HomePage() {
       setReport(DEMO_REPORT);
       setAppState("completed");
       setReportReady(true);
-      // Delay open so DOM renders first, then transition plays
       requestAnimationFrame(() => {
         setTimeout(() => setReportOpen(true), 50);
       });
-    }, 12000);
+    }, 17000);
   }, []);
+
+  // Auto-trigger demo mode if ?action=demo (one-shot, clears URL immediately)
+  const demoTriggered = useRef(false);
+  useEffect(() => {
+    if (searchParams.get("action") === "demo" && !demoTriggered.current && appState === "idle") {
+      demoTriggered.current = true;
+      router.replace("/", { scroll: false });
+      handleDemoRun();
+    }
+  }, [searchParams, handleDemoRun, appState, router]);
 
   return (
     <div className={`h-screen flex flex-col ${appState === "running" || appState === "completed" ? "overflow-hidden" : "overflow-y-auto"}`}>

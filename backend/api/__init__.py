@@ -35,6 +35,9 @@ def _get_or_create_engine(task_id: str) -> CompetitiveAnalysisEngine:
             model_large=settings.model_large,
             model_small=settings.model_small,
             task_id=task_id,
+            anthropic_api_key=settings.anthropic_api_key,
+            anthropic_model=settings.anthropic_model,
+            cross_validation_enabled=settings.cross_validation_enabled,
         )
     return _engines[task_id]
 

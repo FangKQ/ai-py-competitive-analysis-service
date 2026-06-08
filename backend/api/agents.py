@@ -171,16 +171,34 @@ async def test_agent(role: str, body: AgentTestRequest):
     test_tools = body.enabled_tools if body.enabled_tools is not None else config.get("enabled_tools", [])
 
     try:
-        from openai import AsyncOpenAI
         from config import settings
         from harness.capability import create_default_tools
+        from harness.providers import create_openai_provider, create_anthropic_provider
         from harness.runtime import AgentRuntime
         from schemas import AgentRole
 
-        client = AsyncOpenAI(
-            api_key=settings.minimax_api_key,
-            base_url=settings.minimax_base_url,
-        )
+        # Determine provider based on model
+        model_info = None
+        for m in AVAILABLE_MODELS:
+            if m["id"] == test_model:
+                model_info = m
+                break
+
+        provider_type = model_info.get("provider", "openai") if model_info else "openai"
+
+        if provider_type == "anthropic":
+            if not settings.anthropic_api_key:
+                raise HTTPException(status_code=400, detail="Anthropic API key not configured")
+            provider = create_anthropic_provider(
+                api_key=settings.anthropic_api_key,
+                model=test_model,
+            )
+        else:
+            provider = create_openai_provider(
+                api_key=settings.minimax_api_key,
+                base_url=settings.minimax_base_url,
+                model=test_model,
+            )
 
         # Create tool registry and filter by enabled tools
         registry = create_default_tools()
@@ -194,7 +212,7 @@ async def test_agent(role: str, body: AgentTestRequest):
         runtime = AgentRuntime(
             agent_id=f"test_{role}",
             role=agent_role,
-            client=client,
+            provider=provider,
             model=test_model,
             max_iterations=8,
             max_tokens=min(test_budget, 4096),

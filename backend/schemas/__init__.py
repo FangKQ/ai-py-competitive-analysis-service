@@ -23,6 +23,7 @@ class AgentRole(str, Enum):
     WRITER = "writer"
     REVIEWER = "reviewer"
     CITATION = "citation"
+    ARBITER = "arbiter"
 
 
 class TaskStatus(str, Enum):
@@ -303,6 +304,7 @@ class DAGNode(BaseModel):
     task_description: str
     status: TaskStatus = TaskStatus.PENDING
     dependencies: list[str] = Field(default_factory=list)
+    provider_id: str = Field(default="openai", description="LLM provider: openai | anthropic")
     output: Optional[dict] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

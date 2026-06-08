@@ -111,8 +111,15 @@ class DAGOrchestrator:
         self.event_bus = event_bus or EventBus()
         self.max_review_rounds = 2
 
-    def create_default_dag(self, query: str, competitors: list[str]) -> DAGPlan:
-        """为竞品分析任务创建默认 DAG"""
+    def create_default_dag(self, query: str, competitors: list[str], cross_validation: bool = False) -> DAGPlan:
+        """
+        Create default DAG for competitive analysis task.
+
+        :param query: analysis query
+        :param competitors: list of competitor names
+        :param cross_validation: if True, generate parallel split + arbiter nodes
+        :return: DAG execution plan
+        """
         nodes = []
 
         nodes.append(
@@ -124,6 +131,7 @@ class DAGOrchestrator:
                     f"Competitors to analyze: {', '.join(competitors)}"
                 ),
                 dependencies=[],
+                provider_id="openai",
             )
         )
 
@@ -134,34 +142,121 @@ class DAGOrchestrator:
                     agent_role=AgentRole.COLLECTOR,
                     task_description=f"Collect public information about: {comp}",
                     dependencies=["orchestrate"],
+                    provider_id="openai",
                 )
             )
 
         collect_ids = [f"collect_{i}" for i in range(len(competitors))]
-        nodes.append(
-            DAGNode(
-                node_id="analyze",
-                agent_role=AgentRole.ANALYST,
-                task_description=(
-                    "Analyze collected data for all competitors. "
-                    "Create feature comparison, market positioning, and SWOT."
-                ),
-                dependencies=collect_ids,
-            )
-        )
 
-        nodes.append(
-            DAGNode(
-                node_id="write",
-                agent_role=AgentRole.WRITER,
-                task_description=(
-                    "Write a comprehensive competitive analysis report "
-                    "with executive summary, feature comparison, SWOT analysis, "
-                    "and strategic recommendations."
-                ),
-                dependencies=["analyze"],
+        if cross_validation:
+            # Parallel Analyst nodes (GPT + Claude) + Arbiter
+            nodes.append(
+                DAGNode(
+                    node_id="analyze_gpt",
+                    agent_role=AgentRole.ANALYST,
+                    task_description=(
+                        "Analyze collected data for all competitors. "
+                        "Create feature comparison, market positioning, and SWOT."
+                    ),
+                    dependencies=collect_ids,
+                    provider_id="openai",
+                )
             )
-        )
+            nodes.append(
+                DAGNode(
+                    node_id="analyze_claude",
+                    agent_role=AgentRole.ANALYST,
+                    task_description=(
+                        "Analyze collected data for all competitors. "
+                        "Create feature comparison, market positioning, and SWOT."
+                    ),
+                    dependencies=collect_ids,
+                    provider_id="anthropic",
+                )
+            )
+            nodes.append(
+                DAGNode(
+                    node_id="arbiter_analysis",
+                    agent_role=AgentRole.ARBITER,
+                    task_description=(
+                        "Compare and fuse the two independent analysis results. "
+                        "Adopt consensus conclusions, resolve conflicts by evidence strength."
+                    ),
+                    dependencies=["analyze_gpt", "analyze_claude"],
+                    provider_id="anthropic",
+                )
+            )
+
+            # Parallel Writer nodes (GPT + Claude) + Arbiter
+            nodes.append(
+                DAGNode(
+                    node_id="writer_gpt",
+                    agent_role=AgentRole.WRITER,
+                    task_description=(
+                        "Write a comprehensive competitive analysis report "
+                        "with executive summary, feature comparison, SWOT analysis, "
+                        "and strategic recommendations."
+                    ),
+                    dependencies=["arbiter_analysis"],
+                    provider_id="openai",
+                )
+            )
+            nodes.append(
+                DAGNode(
+                    node_id="writer_claude",
+                    agent_role=AgentRole.WRITER,
+                    task_description=(
+                        "Write a comprehensive competitive analysis report "
+                        "with executive summary, feature comparison, SWOT analysis, "
+                        "and strategic recommendations."
+                    ),
+                    dependencies=["arbiter_analysis"],
+                    provider_id="anthropic",
+                )
+            )
+            nodes.append(
+                DAGNode(
+                    node_id="arbiter_report",
+                    agent_role=AgentRole.ARBITER,
+                    task_description=(
+                        "Compare and fuse the two independent reports. "
+                        "Select best structure, merge insights, ensure citation consistency."
+                    ),
+                    dependencies=["writer_gpt", "writer_claude"],
+                    provider_id="anthropic",
+                )
+            )
+
+            # Reviewer and Citation depend on arbiter_report
+            review_dep = "arbiter_report"
+        else:
+            # Single model path (original behavior)
+            nodes.append(
+                DAGNode(
+                    node_id="analyze",
+                    agent_role=AgentRole.ANALYST,
+                    task_description=(
+                        "Analyze collected data for all competitors. "
+                        "Create feature comparison, market positioning, and SWOT."
+                    ),
+                    dependencies=collect_ids,
+                    provider_id="openai",
+                )
+            )
+            nodes.append(
+                DAGNode(
+                    node_id="write",
+                    agent_role=AgentRole.WRITER,
+                    task_description=(
+                        "Write a comprehensive competitive analysis report "
+                        "with executive summary, feature comparison, SWOT analysis, "
+                        "and strategic recommendations."
+                    ),
+                    dependencies=["analyze"],
+                    provider_id="openai",
+                )
+            )
+            review_dep = "write"
 
         nodes.append(
             DAGNode(
@@ -171,7 +266,8 @@ class DAGOrchestrator:
                     "Review the report for accuracy, completeness, and citation quality. "
                     "Score each dimension and provide specific improvement suggestions."
                 ),
-                dependencies=["write"],
+                dependencies=[review_dep],
+                provider_id="openai",
             )
         )
 
@@ -184,6 +280,7 @@ class DAGOrchestrator:
                     "is properly attributed to a source URL with relevant snippet."
                 ),
                 dependencies=["review"],
+                provider_id="openai",
             )
         )
 
