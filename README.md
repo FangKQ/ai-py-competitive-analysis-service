@@ -1,271 +1,189 @@
 <div align="center">
 
-# 🔍 CompetitorLens
+# 🔍 CompetitorAI
 
-### AI-Driven Competitive Analysis Multi-Agent System
+### AI-Driven Multi-Agent Competitive Analysis System
 
-**6 Agents · DAG Orchestration · Harness 5-Layer Architecture · Full Traceability**
+**7 Agents · Dual-Model Cross-Validation · DAG Orchestration · Full Traceability**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-3776AB.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.136+-009688.svg)](https://fastapi.tiangolo.com)
 [![Next.js 15](https://img.shields.io/badge/Next.js-15-000000.svg)](https://nextjs.org)
 
 </div>
 
 ---
 
-## 📖 Overview
+## Overview
 
-**CompetitorLens** is an intelligent competitive analysis system powered by multi-agent collaboration. The system coordinates 6 specialized agents working together to automate the entire pipeline — from public information collection to structured competitive report generation.
+**CompetitorAI** is an intelligent competitive analysis system powered by multi-agent collaboration. It coordinates 7 specialized agents (Orchestrator, Collector, Analyst, Writer, Arbiter, Citation Verifier, Reviewer) to automate the full pipeline from public information gathering to strategic competitive report generation.
 
-### Core Pain Points Solved
+Key highlights:
 
-| Traditional Approach | CompetitorLens |
-|---------------------|----------------|
-| ❌ Information scattered across 10+ platforms | ✅ Collector Agent auto-collects in parallel |
-| ❌ Manual compilation takes days | ✅ 6 Agents collaborate, complete in minutes |
-| ❌ Conclusions lack citations, unverifiable | ✅ Citation Agent verifies each reference |
-| ❌ Analysis quality depends on individual skill | ✅ Reviewer Agent multi-dimensional scoring |
-| ❌ Process is a black box | ✅ Agent decision logs tracked in real-time |
-
-### Key Features
-
-- 🎯 **6 Specialized Agents** — Orchestrator / Collector / Analyst / Writer / Reviewer / Citation
-- 📐 **DAG Task Orchestration** — Directed acyclic graph task flow, parallel collection + serial analysis
-- ⚙️ **Harness 5-Layer Architecture** — Based on [Harness Engineering](https://arxiv.org/pdf/2604.21003) paper
-- 🔗 **Full Traceability** — Each conclusion annotated with source URL, Citation Agent independently verifies
-- 👁️ **Observable** — Agent decision logs tracked in real-time via SSE streaming
-- 🔧 **Ratchet Mechanism** — Errors permanently converted to constraints, preventing repeated mistakes
+- **Dual-Model Cross-Validation** — Analysis and writing run in parallel on GPT-5.5 and Claude Opus 4.8, with an Arbiter agent fusing the best results
+- **Five Looks & Three Defines Methodology** — Industry / Market / Competition / Self / Opportunities + Control Points / Objectives / Strategy
+- **Full Observability** — Real-time DAG progress, timeline-based decision logs, and transparent agent reasoning
+- **Citation Tracing** — Every factual claim is annotated with source URLs, independently verified by the Citation agent
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                  Frontend (Next.js + Landing Page)                │
-│  ┌────────────┐ ┌─────────────┐ ┌─────────┐ ┌───────────────┐  │
-│  │ Agent DAG  │ │ Live Demo   │ │ Traces  │ │ Report View   │  │
-│  └────────────┘ └─────────────┘ └─────────┘ └───────────────┘  │
-├─────────────────────────────────────────────────────────────────┤
-│              API Layer (FastAPI + SSE Real-time Streaming)        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   ┌─────────────┐                                                │
-│   │ Orchestrator │──┬──→ [Collector A] ──┐                       │
-│   │  (Lead Agent)│  │                    │                       │
-│   └─────────────┘  ├──→ [Collector B] ──┤                       │
-│                     └──→ [Collector C] ──┤                       │
-│                                          ▼                       │
-│                                    [Analyst] ──→ [Writer]        │
-│                                                    │             │
-│                                              [Reviewer] ← Review │
-│                                                    │     Loop    │
-│                                              [Citation] → Verify │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│                Harness 5-Layer Infrastructure                     │
-│  L1 Runtime  │ L2 Context │ L3 Capability │ L4 Governance│ L5 DAG│
-│  (ReAct Loop)│ (SharedMem)│ (Tool Reg.)   │ (Budget/Audit)│(Event)│
-└─────────────────────────────────────────────────────────────────┘
+User submits analysis request
+        │
+        ▼
+┌─────────────┐
+│ Orchestrator │ → Parse requirements, plan collection tasks, identify competitors
+└──────┬──────┘
+       │ parallel
+       ▼
+┌──────────────────────────────────────┐
+│ Collectors ×N (Industry/Customer/Comp)│ → Web search + page scraping
+└──────────────────┬───────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────┐
+│ Analyst (GPT) ║ Analyst (Claude) │ → Dual-model structured analysis
+└──────────────────┬───────────────┘
+                   │
+                   ▼
+┌───────────────────────┐
+│ Arbiter (Analysis)     │ → Consensus adoption, conflict resolution, hallucination rejection
+└───────────┬───────────┘
+            │
+            ▼
+┌──────────────────────────────────┐
+│ Writer (GPT)  ║  Writer (Claude) │ → Dual-model report generation
+└──────────────────┬───────────────┘
+                   │
+                   ▼
+┌───────────────────────┐
+│ Arbiter (Report)       │ → Chapter-by-chapter fusion, style unification
+└───────────┬───────────┘
+            │
+            ▼
+┌────────────┐     ┌──────────┐
+│  Citation   │ →  │ Reviewer  │ → Quality scoring, pass/fail gate
+└────────────┘     └──────────┘
+                        │
+                        ▼
+                 Final Competitive Report
 ```
-
-### Architecture References
-
-| Reference | Key Takeaway |
-|-----------|-------------|
-| [Anthropic Multi-Agent Research](https://www.anthropic.com/engineering/multi-agent-research-system) | Orchestrator-Worker pattern, Lead Agent + parallel Subagents |
-| [Harness Engineering](https://arxiv.org/pdf/2604.21003) | Agent = Model + Harness paradigm, 5-layer model, Ratchet mechanism |
-| [Google ADK GraphAgent](https://github.com/google/adk-python) | DAG graph orchestration, topological sort + parallel execution |
 
 ---
 
-## 🚀 Quick Start
+## Features
 
-### Prerequisites
+| Feature | Description |
+|---------|-------------|
+| Multi-Agent DAG Collaboration | 7 agents orchestrated via DAG topology with parallel/serial execution |
+| Dual-Model Cross-Validation | GPT + Claude run in parallel, Arbiter fuses optimal output |
+| Real-Time Visualization | DAG progress graph + timeline decision logs via SSE streaming |
+| Agent Workshop | Online configuration of each agent's model and system prompt |
+| History & Persistence | All tasks persisted to SQLite, with full report retrieval and PDF export |
+| Task Resume | Navigate away and return — active tasks auto-detected with one-click resume |
+| PDF Export | One-click PDF generation with Chinese filename support |
+| Inline Demo | Auto-playing pipeline demo on the homepage |
 
-- Python 3.12+
-- Node.js 18+ (for frontend)
-- MiniMax API Key ([apply here](https://platform.minimax.io))
+---
 
-### Local Development
+## Quick Start
+
+See [Deployment Guide](docs/部署与配置教程.md) for detailed instructions.
+
+### Requirements
+
+- Python 3.10+
+- Node.js 18+
+
+### Start Backend
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/bcefghj/competitive-analysis-agent.git
-cd competitive-analysis-agent
-
-# 2. Configure environment variables
-cp backend/.env.example backend/.env
-# Edit .env and fill in your MiniMax API Key
-
-# 3. Install backend dependencies
 cd backend
-python -m venv venv && source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
-# 4. Start backend
 uvicorn main:app --reload --port 8000
-
-# 5. Install and start frontend (optional)
-cd ../frontend
-npm install && npm run dev
-
-# 6. Or simply open the Landing Page
-# Open landing/index.html in your browser
 ```
 
-### Docker Deployment
+### Start Frontend
 
 ```bash
-# Build and start all services
-docker compose up -d
-
-# View logs
-docker compose logs -f
-
-# Stop services
-docker compose down
+cd frontend
+npm install
+npm run dev
 ```
 
-### Makefile Commands
-
-```bash
-make help          # Show all available commands
-make install       # Install all dependencies
-make dev-backend   # Start backend dev server
-make dev-frontend  # Start frontend dev server
-make build         # Build Docker images
-make deploy        # Deploy with Docker Compose
-make test          # Run tests
-make lint          # Run linters
-make clean         # Clean build artifacts
-```
+Open http://localhost:3000 in your browser.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-competitive-analysis-agent/
 ├── backend/
-│   ├── agents/             # 6 Agent implementations
-│   │   ├── __init__.py     # CompetitiveAnalysisEngine core engine
+│   ├── agents/             # Agent engine (orchestration, collection, analysis, writing, arbitration)
+│   │   ├── __init__.py     # CompetitiveAnalysisEngine core
 │   │   ├── base.py         # BaseAgent (integrates Harness 5 layers)
-│   │   └── prompts.py      # System prompts for all 6 Agents
+│   │   ├── arbiter.py      # Arbiter Agent
+│   │   ├── config_store.py # Agent config persistence (SQLite)
+│   │   └── prompts.py      # System prompts for all agents
+│   ├── api/                # FastAPI routes (task management + agent config)
 │   ├── harness/            # Harness 5-Layer Architecture
 │   │   ├── runtime.py      # L1: ReAct Loop + Ratchet mechanism
 │   │   ├── context.py      # L2: SharedMemory
-│   │   ├── capability.py   # L3: MCP-style tool registry
-│   │   ├── governance.py   # L4: Budget/Token governance + audit
+│   │   ├── capability.py   # L3: Tool registry (search, scrape)
+│   │   ├── governance.py   # L4: Budget/Token governance
+│   │   ├── providers.py    # LLM Providers (OpenAI + Anthropic)
 │   │   └── surface.py      # L5: DAG orchestration + EventBus
-│   ├── schemas/            # Competitive knowledge Schema (15+ Models)
-│   ├── api/                # FastAPI routes
-│   ├── export/             # Report export (PDF)
-│   ├── examples/           # Pre-built demo cached data
+│   ├── data/               # SQLite persistence (config + history)
+│   ├── export/             # PDF export (weasyprint)
 │   ├── config.py           # Configuration (pydantic-settings)
-│   ├── main.py             # FastAPI entry point
-│   └── requirements.txt    # Python dependencies
-├── frontend/               # Next.js dashboard
-│   ├── app/                # App router pages
-│   ├── components/         # React components (DAG, Report, Trace)
-│   └── lib/                # API client utilities
-├── landing/                # Static landing page + Demo
-│   ├── index.html          # Project introduction (12-section narrative)
-│   ├── demo.html           # Interactive demo page
-│   ├── style.css           # Landing page styles
-│   ├── demo.css            # Demo page styles
-│   ├── app.js              # Agent simulator
-│   └── demo.js             # Real-time analysis + Markdown renderer
-├── docs/
-│   ├── design/             # Architecture design documents
-│   └── report/             # LaTeX technical report (50+ pages)
-├── docker-compose.yml      # Multi-service orchestration
-├── nginx.conf              # Nginx reverse proxy config
-├── Makefile                # Development shortcuts
-└── README.md
+│   └── main.py             # FastAPI entry point
+├── frontend/               # Next.js 15 frontend
+│   ├── app/                # Pages (home, agent workshop)
+│   ├── components/         # UI components (DAG, TracePanel, Report, History)
+│   └── lib/                # API client, React Context
+├── docs/                   # Documentation
+└── landing/                # Static landing page
 ```
 
 ---
 
-## 📝 API Reference
-
-### Core Endpoints
+## API Reference
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/tasks` | Create competitive analysis task |
-| GET | `/api/tasks/{id}` | Get task status and report |
-| GET | `/api/tasks/{id}/report` | Get full Markdown report |
-| GET | `/api/tasks/{id}/traces` | Get Agent decision trace logs |
 | GET | `/api/tasks/{id}/events` | SSE real-time event stream |
-| GET | `/api/demos` | List pre-built demo scenarios |
-| GET | `/api/health` | Health check |
-
-### Example Usage
-
-```bash
-# Create an analysis task
-curl -X POST http://localhost:8000/api/tasks \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Analyze the AI assistant market competitive landscape"}'
-
-# Get task result
-curl http://localhost:8000/api/tasks/{task_id}
-```
+| GET | `/api/tasks/{id}/report` | Get full Markdown report |
+| GET | `/api/tasks/{id}/export/pdf` | Export report as PDF |
+| GET | `/api/history` | List task history |
+| GET | `/api/history/{id}` | Get history detail with full report |
+| GET | `/api/agents` | List agent configurations |
+| PUT | `/api/agents/{role}` | Update agent config (model, prompt) |
+| POST | `/api/agents/{role}/test` | Test agent with custom input |
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
-| LLM | MiniMax M2.7 | Anthropic SDK compatible interface |
-| Backend | FastAPI + Pydantic v2 | Async high-performance + structured data validation |
-| Agent Framework | Custom Harness | Based on Harness Engineering paper, zero LangChain dependency |
-| Tools | httpx + BeautifulSoup | Web search + page scraping, MCP-style registration |
-| Real-time | SSE (Server-Sent Events) | Lightweight, native EventSource support |
-| Frontend | Next.js 15 + React 19 | Dashboard with DAG visualization |
-| Landing | Pure HTML + CSS + JS | Zero-build, direct deployment |
-| Data Models | 15+ Pydantic Models | Custom competitive knowledge schema |
-| Deployment | Docker + Nginx | Containerized, reverse proxy |
+| LLM | GPT-5.5 + Claude Opus 4.8 | Dual-model cross-validation |
+| Backend | FastAPI + Pydantic v2 | Async high-performance + structured validation |
+| Agent Framework | Custom Harness 5-Layer | Zero LangChain dependency |
+| Search | Tavily API | LLM-optimized search results |
+| Real-time | SSE (Server-Sent Events) | Lightweight unidirectional push |
+| Frontend | Next.js 15 + React 19 + TailwindCSS 4 | DAG visualization + timeline tracing |
+| Persistence | SQLite (aiosqlite) | Config + task history |
+| PDF | weasyprint | Markdown → HTML → PDF |
+| Deployment | Docker + Nginx | Containerized deployment |
 
 ---
 
-## ✅ Status
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| 6-Agent Collaboration Engine | ✅ Built | Orchestrator + 5 Worker Agents |
-| Harness 5-Layer Architecture | ✅ Built | Runtime/Context/Capability/Governance/Surface |
-| SSE Real-time Event Streaming | ✅ Built | Agent execution status pushed in real-time |
-| Web Search + Scraping | ✅ Built | DuckDuckGo + BeautifulSoup |
-| Competitive Knowledge Schema | ✅ Built | 15+ Pydantic Models |
-| Agent Decision Log Tracing | ✅ Built | Every step of reasoning/tool calls recorded |
-| Ratchet Mechanism | ✅ Built | Error → constraint auto-conversion |
-| Demo Fallback | ✅ Built | API failure auto-fallback to cached data |
-| Cross-review Feedback Loop | 🧪 Lab | Reviewer → Writer revision cycle |
-| PostgreSQL Persistence | 📋 Planned | Currently using in-memory storage |
-
----
-
-## 📄 Technical Report
-
-A comprehensive 50+ page LaTeX technical report covering:
-
-- System architecture design and technology selection
-- Multi-Agent collaboration mechanism analysis
-- Harness Engineering 5-layer model implementation
-- Competitive knowledge schema design
-- Experimental evaluation and ablation studies
-- Deployment architecture
-
-See [`docs/report/main.tex`](docs/report/main.tex) for the source.
-
----
-
-## 📜 License
+## License
 
 [MIT License](LICENSE)
 
@@ -273,8 +191,6 @@ See [`docs/report/main.tex`](docs/report/main.tex) for the source.
 
 <div align="center">
 
-**CompetitorLens** — AI-Driven Competitive Analysis Multi-Agent System
-
-Built with FastAPI + Next.js + Harness Engineering
+**CompetitorAI** — AI-Driven Multi-Agent Competitive Analysis System
 
 </div>
