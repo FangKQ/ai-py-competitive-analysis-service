@@ -16,6 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from agents import CompetitiveAnalysisEngine
 from config import settings
+from data.task_history import task_history_store
 from schemas import AnalysisTask, TaskStatus, ReportDepth
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,17 @@ async def create_task(req: CreateTaskRequest):
     )
     _tasks[task.task_id] = task
 
+    # Persist to history
+    await task_history_store.insert(
+        task_id=task.task_id,
+        query=req.query,
+        self_description=req.self_description,
+        competitors=req.competitors,
+        industry=req.industry,
+        focus_areas=req.focus_areas,
+        report_depth=req.report_depth,
+    )
+
     asyncio.create_task(_run_analysis(task.task_id, req.use_demo))
 
     return TaskResponse(
@@ -100,10 +112,24 @@ async def _run_analysis(task_id: str, demo_id: str = "") -> None:
     try:
         engine = _get_or_create_engine(task_id)
         await engine.analyze(task)
+        # Persist completed result to history
+        if task.report:
+            await task_history_store.update_completed(
+                task_id=task_id,
+                status="completed",
+                markdown_report=task.report.markdown_report or "",
+                executive_summary=task.report.executive_summary or "",
+                total_tokens=task.report.total_tokens_used or 0,
+                total_duration_ms=task.report.total_duration_ms or 0,
+            )
     except Exception as e:
         logger.error(f"Analysis failed for {task_id}: {e}", exc_info=True)
         task.status = TaskStatus.FAILED
         task.error_message = str(e)
+        await task_history_store.update_completed(
+            task_id=task_id,
+            status="failed",
+        )
         await _run_demo_fallback(task, "ai-assistant")
 
 
@@ -370,31 +396,65 @@ async def get_engine_status():
 @router.get("/tasks/{task_id}/export/pdf")
 async def export_pdf(task_id: str):
     """导出竞品分析报告为 PDF"""
+    # Try in-memory first, then fallback to history DB
     task = _tasks.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if not task.report:
-        raise HTTPException(status_code=404, detail="Report not ready yet")
-    if not task.report.markdown_report:
-        raise HTTPException(status_code=404, detail="Report content is empty")
+    markdown_report = None
+    query = ""
+
+    if task and task.report and task.report.markdown_report:
+        markdown_report = task.report.markdown_report
+        query = task.query
+    else:
+        # Fallback: load from history DB
+        record = await task_history_store.get_by_id(task_id)
+        if record and record.get("markdown_report"):
+            markdown_report = record["markdown_report"]
+            query = record.get("query", "")
+
+    if not markdown_report:
+        raise HTTPException(status_code=404, detail="Report not found")
 
     try:
         from export import render_pdf
 
-        pdf_bytes = render_pdf(task.report.markdown_report)
-        filename = f"competitive_analysis_{task_id[:8]}.pdf"
+        # Run PDF rendering in thread pool to avoid blocking the event loop
+        import asyncio
+        pdf_bytes = await asyncio.get_event_loop().run_in_executor(
+            None, render_pdf, markdown_report
+        )
+        safe_name = query.replace("/", "_").replace("\\", "_").replace(" ", "_")[:50] if query else "竞品分析报告"
+        filename = f"{safe_name}.pdf"
+        # Use RFC 5987 encoding for non-ASCII filenames
+        from urllib.parse import quote
+        encoded_filename = quote(filename)
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}",
             },
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"PDF export failed for {task_id}: {e}")
-        raise HTTPException(status_code=500, detail="PDF export failed")
+        logger.error(f"PDF export failed for {task_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"PDF export failed: {str(e)}")
+
+
+@router.get("/history")
+async def get_history():
+    """Get all task history records (summary only, no full report)."""
+    records = await task_history_store.get_all()
+    return {"tasks": records}
+
+
+@router.get("/history/{task_id}")
+async def get_history_detail(task_id: str):
+    """Get a single task history record with full report."""
+    record = await task_history_store.get_by_id(task_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Task not found in history")
+    return record
 
 
 @router.get("/health")

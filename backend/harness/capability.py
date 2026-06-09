@@ -66,6 +66,10 @@ class ToolRegistry:
 
 async def web_search(query: str, max_results: int = 5) -> str:
     """Web 搜索工具 - 优先使用 Tavily API，fallback 到 DuckDuckGo"""
+    from config import settings
+    # Apply dev mode search result limit
+    max_results = min(max_results, settings.dev_max_search_results)
+
     # Try Tavily first
     tavily_result = await _tavily_search(query, max_results)
     if tavily_result:

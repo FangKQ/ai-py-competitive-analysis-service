@@ -136,6 +136,72 @@ class AgentRuntime:
             f"\n\n## Active Constraints (learned from past errors)\n{constraints}\n"
         )
 
+    def _format_tool_input(self, tool_name: str, args: dict) -> str:
+        """
+        Format tool input for display in trace logs.
+
+        :param tool_name: tool name
+        :param args: tool arguments dict
+        :return: human-readable input string
+        """
+        if tool_name == "web_search":
+            query = args.get("query", "") if isinstance(args, dict) else str(args)
+            return f"「{query}」"
+        if isinstance(args, dict):
+            # Show key params concisely
+            parts = []
+            for k, v in list(args.items())[:3]:
+                if isinstance(v, str) and len(v) > 80:
+                    v = v[:77] + "..."
+                parts.append(f"{k}={v}")
+            return ", ".join(parts)
+        return str(args)[:150]
+
+    def _format_tool_output(self, tool_name: str, result_str: str) -> str:
+        """
+        Format tool output as a concise summary for trace logs.
+
+        :param tool_name: tool name
+        :param result_str: raw result string
+        :return: human-readable output summary
+        """
+        import json as _json
+        import re
+
+        if tool_name == "web_search":
+            # Try to parse as JSON array of search results
+            try:
+                data = _json.loads(result_str)
+                if isinstance(data, list):
+                    count = len(data)
+                    # Extract domain names from urls
+                    domains = []
+                    for item in data[:5]:
+                        if isinstance(item, dict):
+                            url = item.get("url", "")
+                            domain = re.search(r'://(?:www\.)?([^/]+)', url)
+                            if domain:
+                                domains.append(domain.group(1))
+                    domain_text = "、".join(domains[:3])
+                    if len(domains) > 3:
+                        domain_text += " 等"
+                    return f"获取 {count} 条结果：{domain_text}" if domain_text else f"获取 {count} 条结果"
+                elif isinstance(data, dict) and "results" in data:
+                    results = data["results"]
+                    count = len(results) if isinstance(results, list) else 0
+                    return f"获取 {count} 条结果"
+            except (_json.JSONDecodeError, TypeError):
+                pass
+            # Fallback: count items heuristically
+            count = result_str.count('"title"')
+            if count > 0:
+                return f"获取 {count} 条搜索结果"
+
+        # Generic: truncate with ellipsis
+        if len(result_str) > 100:
+            return result_str[:97] + "..."
+        return result_str
+
     async def run(
         self,
         system_prompt: str,
@@ -159,6 +225,7 @@ class AgentRuntime:
 
         self.status = TaskStatus.RUNNING
         self._tool_call_results: list[dict] = []
+        self._search_call_count: int = 0
 
         full_system_prompt = system_prompt + self.get_ratchet_constraints()
         messages = [{"role": "user", "content": user_message}]
@@ -216,6 +283,16 @@ class AgentRuntime:
                     tc_id = tc["id"]
 
                     if tool_executor:
+                        # Enforce search call limit in dev mode
+                        if tc_name == "web_search":
+                            from config import settings
+                            if self._search_call_count >= settings.dev_max_search_calls:
+                                result_str = json.dumps({"info": "搜索次数已达开发模式上限"}, ensure_ascii=False)
+                                tool_msg = self.provider.build_tool_result_message(tc_id, result_str)
+                                messages.append(tool_msg)
+                                continue
+                            self._search_call_count += 1
+
                         try:
                             result = await tool_executor(tc_name, tc_args)
                             result_str = str(result)
@@ -231,8 +308,8 @@ class AgentRuntime:
                                 )
                             self._tool_call_results.append({
                                 "tool": tc_name,
-                                "input": str(tc_args)[:200],
-                                "output_summary": result_str[:200],
+                                "input": self._format_tool_input(tc_name, tc_args),
+                                "output_summary": self._format_tool_output(tc_name, result_str),
                                 "status": "success",
                             })
                         except Exception as e:
@@ -249,8 +326,8 @@ class AgentRuntime:
                                 )
                             self._tool_call_results.append({
                                 "tool": tc_name,
-                                "input": str(tc_args)[:200],
-                                "output_summary": error_msg[:200],
+                                "input": self._format_tool_input(tc_name, tc_args),
+                                "output_summary": error_msg[:150],
                                 "status": "failed",
                             })
                             self.add_ratchet_rule(

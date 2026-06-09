@@ -104,9 +104,11 @@ class CompetitiveAnalysisEngine:
         :param role: agent role
         :param prompt: system prompt
         :param node_id: DAG node identifier
-        :param provider_id: which provider to use (openai | anthropic)
+        :param provider_id: which provider to use (openai | anthropic | primary), overridden by user config
         :return: configured BaseAgent instance
         """
+        from agents.config_store import AVAILABLE_MODELS
+
         role_key = role.value
         enabled_tools: list[str] | None = None
 
@@ -116,17 +118,34 @@ class CompetitiveAnalysisEngine:
             model = cfg.get("model", self.model_small)
             prompt = cfg.get("system_prompt", prompt)
             enabled_tools = cfg.get("enabled_tools")
+
+            # "primary" means use the role's configured model (model field)
+            if provider_id == "primary":
+                model_provider = "openai"
+                for m in AVAILABLE_MODELS:
+                    if m["id"] == model:
+                        model_provider = m.get("provider", "openai")
+                        break
+                provider_id = model_provider
+            else:
+                # Determine provider from user-selected model
+                model_provider = "openai"
+                for m in AVAILABLE_MODELS:
+                    if m["id"] == model:
+                        model_provider = m.get("provider", "openai")
+                        break
+                provider_id = model_provider
         else:
             # Fallback: model layering based on role
             heavy_roles = {AgentRole.ANALYST, AgentRole.WRITER}
             model = self.model_large if role in heavy_roles else self.model_small
 
-        # Select provider based on provider_id
+        # Select provider based on resolved provider_id
         provider = None
         if provider_id == "anthropic" and self.anthropic_provider:
             provider = self.anthropic_provider
         else:
-            # Default to OpenAI
+            # Default to OpenAI - use appropriate size
             heavy_roles = {AgentRole.ANALYST, AgentRole.WRITER}
             if role in heavy_roles:
                 provider = self.openai_provider
@@ -148,6 +167,54 @@ class CompetitiveAnalysisEngine:
         self._agents[agent.runtime.agent_id] = agent
         return agent
 
+    def _create_agent_with_model(self, role: AgentRole, prompt: str, node_id: str, model_id: str) -> BaseAgent:
+        """Create an agent with an explicit model (for cross-validation model B).
+
+        :param role: agent role
+        :param prompt: system prompt (uses config snapshot if available)
+        :param node_id: DAG node identifier
+        :param model_id: explicit model ID to use
+        :return: configured BaseAgent instance
+        """
+        from agents.config_store import AVAILABLE_MODELS
+
+        role_key = role.value
+        enabled_tools: list[str] | None = None
+
+        # Use prompt from config if available
+        if hasattr(self, "_config_snapshot") and role_key in self._config_snapshot:
+            cfg = self._config_snapshot[role_key]
+            prompt = cfg.get("system_prompt", prompt)
+            enabled_tools = cfg.get("enabled_tools")
+
+        # Determine provider from model_id
+        model_provider = "openai"
+        for m in AVAILABLE_MODELS:
+            if m["id"] == model_id:
+                model_provider = m.get("provider", "openai")
+                break
+
+        provider = None
+        if model_provider == "anthropic" and self.anthropic_provider:
+            provider = self.anthropic_provider
+        else:
+            provider = self.openai_provider
+
+        agent = BaseAgent(
+            role=role,
+            system_prompt=prompt,
+            provider=provider,
+            model=model_id,
+            tools=self.tools,
+            shared_memory=self.shared_memory,
+            governance=self.governance,
+            event_bus=self.event_bus,
+            node_id=node_id,
+            enabled_tools=enabled_tools,
+        )
+        self._agents[agent.runtime.agent_id] = agent
+        return agent
+
     async def _publish_node_trace(
         self, node_id: str, label: str, agent: BaseAgent
     ) -> None:
@@ -156,7 +223,12 @@ class CompetitiveAnalysisEngine:
         total_duration_ms = sum(log.duration_ms for log in logs)
 
         # Use actual tracked tool call results (with real status)
-        tool_calls = getattr(agent.runtime, "_tool_call_results", [])
+        # Only include tool calls for roles that are supposed to call tools
+        tool_roles = {"collector", "orchestrator", "citation"}
+        if agent.role.value in tool_roles:
+            tool_calls = getattr(agent.runtime, "_tool_call_results", [])
+        else:
+            tool_calls = []
 
         # Build human-readable reasoning (not raw JSON)
         reasoning = self._build_readable_reasoning(agent, logs)
@@ -178,10 +250,26 @@ class CompetitiveAnalysisEngine:
         self, agent: BaseAgent, logs: list
     ) -> str:
         """Convert raw agent output into human-readable reasoning summary."""
+        # For Collector, always use tool-call-based summary
+        if agent.role.value == "collector":
+            return self._summarize_collector(agent)
+
+        # For Analyst/Writer, always generate action summary (never show raw output)
+        if agent.role.value in ("analyst", "writer"):
+            last_reasoning = ""
+            for log in reversed(logs or []):
+                if log.reasoning:
+                    last_reasoning = log.reasoning
+                    break
+            # If no 【思考过程】 found for writer, try to extract from report structure
+            if agent.role.value == "writer" and last_reasoning and "【思考过程】" not in last_reasoning:
+                return self._summarize_writer_output(last_reasoning)
+            return self._generate_action_summary(agent, last_reasoning)
+
         if not logs:
             return ""
 
-        # Get the full final result from shared memory if available
+        # Get reasoning text for other roles
         last_reasoning = ""
         for log in reversed(logs):
             if log.reasoning:
@@ -194,7 +282,6 @@ class CompetitiveAnalysisEngine:
         # If it looks like JSON, parse and format as readable text
         stripped = last_reasoning.strip()
         if stripped.startswith("{") or stripped.startswith("["):
-            # Try to find complete JSON
             try:
                 start = stripped.find("{")
                 end = stripped.rfind("}") + 1
@@ -203,19 +290,228 @@ class CompetitiveAnalysisEngine:
                     return self._json_to_readable(data, agent.role.value)
             except json.JSONDecodeError:
                 pass
-            # If JSON parse fails, extract readable parts manually
             return self._extract_readable_from_partial(stripped, agent.role.value)
 
-        # For Analyst/Writer, extract 【思考过程】 section if present
-        if agent.role.value in ("analyst", "writer"):
-            thinking = self._extract_thinking_section(stripped)
-            if thinking:
-                return thinking
-            # Fallback: if no thinking section marker, show first 300 chars of output
-            return stripped[:300]
+        # For other roles
+        if agent.role.value == "citation":
+            return self._summarize_citation(stripped)
+        if agent.role.value == "reviewer":
+            return self._summarize_reviewer(stripped)
 
-        # For other roles with plain text reasoning
-        return last_reasoning[:300]
+        return last_reasoning[:200]
+
+    def _generate_action_summary(self, agent: BaseAgent, text: str) -> str:
+        """
+        Generate a structured action summary for analyst/writer traces.
+        Extracts from [TRACE_SUMMARY] or 【思考过程】 section.
+
+        :param agent: the agent instance
+        :param text: raw output text
+        :return: multi-line structured summary
+        """
+        import re
+        role = agent.role.value
+
+        if not text:
+            return "执行完成。"
+
+        # Try to extract [TRACE_SUMMARY] block
+        if "[TRACE_SUMMARY]" in text:
+            marker = "[TRACE_SUMMARY]"
+            start = text.find(marker)
+            if start >= 0:
+                after_marker = text[start + len(marker):]
+                summary_lines = []
+                for line in after_marker.split("\n"):
+                    stripped_line = line.strip()
+                    if not stripped_line and summary_lines:
+                        break
+                    if stripped_line.startswith("【"):
+                        break
+                    if stripped_line:
+                        summary_lines.append(stripped_line)
+                if summary_lines:
+                    return "\n".join(summary_lines)
+
+        # Extract from 【思考过程】 section - take first sentence of each numbered point
+        if "【思考过程】" in text:
+            thinking_start = text.find("【思考过程】") + len("【思考过程】")
+            thinking_end = text.find("【正式输出】", thinking_start)
+            if thinking_end == -1:
+                thinking_end = min(thinking_start + 1500, len(text))
+            thinking_text = text[thinking_start:thinking_end].strip()
+
+            # Find all numbered sections
+            sections = re.findall(r'\d+\.\s*(.+?)(?=\n\s*\d+\.|$)', thinking_text, re.DOTALL)
+            lines = []
+            for section in sections:
+                first_line = section.strip().split("\n")[0].replace("**", "").strip()
+                if "：" in first_line:
+                    label, after = first_line.split("：", 1)
+                    label = label.strip()
+                    after = after.strip()
+                    if not after:
+                        for nl in section.strip().split("\n")[1:]:
+                            nl = nl.strip().lstrip("-").lstrip("•").lstrip(" ")
+                            if nl:
+                                after = nl
+                                break
+                    if after:
+                        # Remove extra colons from content to keep format clean
+                        after = after.replace("：", "，").replace(":", "，")
+                        short = after[:150]
+                        if len(after) > 150:
+                            short += "..."
+                        lines.append(f"{label}：{short}")
+                    else:
+                        lines.append(label)
+                else:
+                    lines.append(first_line[:80])
+
+            if lines:
+                return "\n".join(lines[:4])
+
+        # Fallback
+        if role == "analyst":
+            return "分析框架：五看三定\n分析维度：行业趋势、市场客户、竞争格局、自身能力、战略机会"
+        elif role == "writer":
+            title_match = re.search(r'^#\s+(.+?)$', text, re.MULTILINE)
+            if title_match:
+                return f"报告标题：{title_match.group(1)}"
+            return "撰写竞品分析报告"
+
+        return "执行完成。"
+
+    def _summarize_writer_output(self, text: str) -> str:
+        """
+        Generate a thinking-chain style summary for writer, matching analyst format.
+        Uses the same label structure: 结构规划/数据编排/表达策略/质量自检
+
+        :param text: raw writer output (possibly truncated at 2000 chars)
+        :return: multi-line structured summary matching thinking chain format
+        """
+        import re
+        lines = []
+
+        # 结构规划 - extract from headings
+        headings = re.findall(r'^##\s+(.+?)$', text, re.MULTILINE)
+        if headings:
+            lines.append(f"结构规划：八章节完整输出（{'、'.join(h.strip() for h in headings[:6])}）")
+        else:
+            lines.append("结构规划：按五看三定八章节结构撰写")
+
+        # 数据编排 - count references
+        ref_count = len(re.findall(r'\[\d+\]', text))
+        table_rows = len(re.findall(r'^\|.+\|.+\|', text, re.MULTILINE))
+        data_parts = []
+        if ref_count > 0:
+            data_parts.append(f"引用 {ref_count} 条数据来源")
+        if table_rows > 0:
+            data_parts.append(f"含 {table_rows} 行表格对比数据")
+        lines.append(f"数据编排：{'，'.join(data_parts)}" if data_parts else "数据编排：按引用编号顺序组织 evidence 数据")
+
+        # 表达策略 - detect style indicators
+        has_strategy_tag = "战略建议" in text or "「战略建议」" in text
+        style_desc = "面向高层决策者，精炼重结论"
+        if has_strategy_tag:
+            style_desc += "，推断性内容已标注「战略建议」"
+        lines.append(f"表达策略：{style_desc}")
+
+        # 质量自检 - report length and completeness
+        text_len = len(text)
+        chapter_count = len(headings)
+        check_parts = []
+        if text_len > 0:
+            check_parts.append(f"篇幅 {text_len}+ 字")
+        if chapter_count > 0:
+            check_parts.append(f"{chapter_count} 章节完整")
+        if ref_count > 0:
+            check_parts.append(f"引用充足")
+        lines.append(f"质量自检：{'，'.join(check_parts)}" if check_parts else "质量自检：通过")
+
+        return "\n".join(lines)
+
+    def _summarize_collector(self, agent: BaseAgent) -> str:
+        """
+        Summarize collector agent activity based on its tool calls.
+
+        :param agent: the collector agent
+        :return: human-readable summary of collection activity
+        """
+        import re
+        tool_results = getattr(agent.runtime, "_tool_call_results", [])
+        if not tool_results:
+            return "采集完成。"
+
+        search_count = sum(1 for t in tool_results if t["tool"] == "web_search")
+        total_results = 0
+        domains = set()
+        queries = []
+
+        for t in tool_results:
+            if t["tool"] == "web_search":
+                # Extract query from input
+                inp = t.get("input", "")
+                # Input is formatted as 「query」
+                q_match = re.search(r'「(.+?)」', inp)
+                if q_match:
+                    queries.append(q_match.group(1))
+                # Extract result count from output_summary
+                count_match = re.search(r'获取\s*(\d+)\s*条', t.get("output_summary", ""))
+                if count_match:
+                    total_results += int(count_match.group(1))
+                # Extract domains from output_summary
+                summary = t.get("output_summary", "")
+                domain_part = summary.split("：")[-1] if "：" in summary else ""
+                for d in re.findall(r'[\w.-]+\.\w+', domain_part):
+                    domains.add(d)
+
+        parts = []
+        if search_count > 0:
+            parts.append(f"搜索 {search_count} 次")
+        if total_results > 0:
+            parts.append(f"获取 {total_results} 条结果")
+        if domains:
+            domain_list = "、".join(list(domains)[:4])
+            if len(domains) > 4:
+                domain_list += " 等"
+            parts.append(f"来源：{domain_list}")
+        # Show search topics if we have queries
+        if queries and not domains:
+            topic_list = "、".join(q[:15] for q in queries[:3])
+            if len(queries) > 3:
+                topic_list += " 等"
+            parts.append(f"搜索主题：{topic_list}")
+
+        return "，".join(parts) + "。" if parts else "采集完成。"
+
+    def _summarize_citation(self, text: str) -> str:
+        """Summarize citation agent output."""
+        import re
+        urls = re.findall(r'https?://[^\s\)\"]+', text)
+        valid_count = text.lower().count("✓") + text.lower().count("valid") + text.lower().count("可访问")
+        invalid_count = text.lower().count("✗") + text.lower().count("invalid") + text.lower().count("不可访问")
+
+        if urls:
+            parts = [f"验证 {len(urls)} 条引用 URL"]
+            if valid_count:
+                parts.append(f"{valid_count} 条有效")
+            if invalid_count:
+                parts.append(f"{invalid_count} 条失效")
+            return "，".join(parts) + "。"
+        return text[:150]
+
+    def _summarize_reviewer(self, text: str) -> str:
+        """Summarize reviewer agent output."""
+        import re
+        # Try to find scores
+        scores = re.findall(r'(\d+(?:\.\d+)?)\s*/\s*10', text)
+        if scores:
+            score_text = "、".join(f"{s}/10" for s in scores[:3])
+            return f"审查报告评分: {score_text}。"
+        if "通过" in text:
+            return "审查报告: 通过。"
+        return text[:150]
 
     def _extract_thinking_section(self, text: str) -> str:
         """Extract 【思考过程】 content from agent output."""
@@ -238,7 +534,27 @@ class CompetitiveAnalysisEngine:
         return thinking
 
     def _strip_thinking_section(self, text: str) -> str:
-        """Remove 【思考过程】...【正式输出】 prefix from output, keep only the content."""
+        """Remove [TRACE_SUMMARY] and 【思考过程】...【正式输出】 prefix from output, keep only the content."""
+        # First strip [TRACE_SUMMARY] block if present
+        if "[TRACE_SUMMARY]" in text:
+            marker = "[TRACE_SUMMARY]"
+            start = text.find(marker)
+            # Find end of TRACE_SUMMARY (next 【 marker or empty line after content)
+            after = text[start + len(marker):]
+            # Skip until we find 【思考过程】 or 【正式输出】 or end of summary block
+            for end_marker in ["【思考过程】", "【正式输出】"]:
+                em_idx = after.find(end_marker)
+                if em_idx >= 0:
+                    text = text[:start] + after[em_idx:]
+                    break
+            else:
+                # No thinking markers found, try to find JSON or markdown start
+                for delimiter in ["{", "# "]:
+                    d_idx = after.find(delimiter)
+                    if d_idx >= 0:
+                        text = after[d_idx:]
+                        break
+
         marker_end = "【正式输出】"
         end_idx = text.find(marker_end)
         if end_idx != -1:
@@ -252,6 +568,44 @@ class CompetitiveAnalysisEngine:
                 if d_idx != -1:
                     return text[d_idx:].strip()
         return text
+
+    def _extract_decision_summary(self, text: str, fallback: str = "") -> str:
+        """
+        Extract [DECISION_SUMMARY] line from arbiter output.
+
+        :param text: raw arbiter output
+        :param fallback: fallback string if no summary found
+        :return: decision summary text
+        """
+        if not text:
+            return fallback
+        marker = "[DECISION_SUMMARY]"
+        for line in text.split("\n")[:5]:
+            if marker in line:
+                return line.split(marker, 1)[1].strip()
+        return fallback
+
+    def _strip_decision_summary(self, text: str) -> str:
+        """
+        Remove [DECISION_SUMMARY] line from the beginning of arbiter output.
+
+        :param text: raw arbiter output
+        :return: text without the summary line
+        """
+        if not text:
+            return text
+        marker = "[DECISION_SUMMARY]"
+        lines = text.split("\n")
+        # Remove the summary line (usually first non-empty line)
+        filtered = []
+        found = False
+        for line in lines:
+            if not found and marker in line:
+                found = True
+                continue
+            filtered.append(line)
+        result = "\n".join(filtered).strip()
+        return result if result else text
 
     def _extract_readable_from_partial(self, text: str, role: str) -> str:
         """Extract readable info from partial/invalid JSON text."""
@@ -566,8 +920,15 @@ class CompetitiveAnalysisEngine:
 
         if self.cross_validation_enabled and self.anthropic_provider:
             # Parallel dual-model analysis + arbiter
-            analyst_gpt = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze_gpt", "openai")
-            analyst_claude = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze_claude", "anthropic")
+            # Use model_b from user config if available
+            analyst_cfg = self._config_snapshot.get("analyst", {}) if hasattr(self, "_config_snapshot") else {}
+            model_b = analyst_cfg.get("model_b")
+            if model_b:
+                analyst_gpt = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze_gpt", "primary")
+                analyst_claude = self._create_agent_with_model(AgentRole.ANALYST, ANALYST_PROMPT, "analyze_claude", model_b)
+            else:
+                analyst_gpt = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze_gpt", "openai")
+                analyst_claude = self._create_agent(AgentRole.ANALYST, ANALYST_PROMPT, "analyze_claude", "anthropic")
 
             await self.event_bus.publish(Event(
                 "node_started", "analyze_gpt",
@@ -650,9 +1011,13 @@ class CompetitiveAnalysisEngine:
                     "node_started", "arbiter_analysis",
                     {"role": "arbiter", "task": "仲裁融合分析结果"},
                 ))
+                # Use system_prompt from config if available, otherwise default
+                arbiter_cfg = self._config_snapshot.get("arbiter", {}) if hasattr(self, "_config_snapshot") else {}
+                analysis_prompt = arbiter_cfg.get("system_prompt") or ARBITER_ANALYSIS_PROMPT
+
                 arbiter = ArbiterAgent(
                     provider=self.anthropic_provider,
-                    system_prompt=ARBITER_ANALYSIS_PROMPT,
+                    system_prompt=analysis_prompt,
                     event_bus=self.event_bus,
                     node_id="arbiter_analysis",
                 )
@@ -667,13 +1032,20 @@ class CompetitiveAnalysisEngine:
                     f"Arbiter analysis result: status={arbiter_result.get('status')}, "
                     f"result_len={len(analysis_text)}"
                 )
+                # Extract decision summary from arbiter output
+                arbiter_analysis_summary = self._extract_decision_summary(
+                    analysis_text,
+                    fallback=f"对比 GPT 和 Claude 的分析结果，融合输出最终分析（{len(analysis_text)} 字）"
+                )
+                # Strip the summary line from the actual content
+                analysis_text = self._strip_decision_summary(analysis_text)
                 # Publish trace for arbiter
                 await self.event_bus.publish(Event(
                     "node_trace", "arbiter_analysis",
                     {
                         "role": "arbiter",
                         "label": "仲裁官(分析)",
-                        "reasoning": analysis_text[:500] if analysis_text else "仲裁结果为空",
+                        "reasoning": arbiter_analysis_summary if analysis_text else f"仲裁未产出结果（状态: {arbiter_result.get('status', 'unknown')}，错误: {arbiter_result.get('error', '无')}）",
                         "tool_calls": [],
                         "input_tokens": arbiter_result.get("total_input_tokens", 0),
                         "output_tokens": arbiter_result.get("total_output_tokens", 0),
@@ -713,8 +1085,15 @@ class CompetitiveAnalysisEngine:
 
         if self.cross_validation_enabled and self.anthropic_provider:
             # Parallel dual-model writing + arbiter
-            writer_gpt = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "writer_gpt", "openai")
-            writer_claude = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "writer_claude", "anthropic")
+            # Use model_b from user config if available
+            writer_cfg = self._config_snapshot.get("writer", {}) if hasattr(self, "_config_snapshot") else {}
+            model_b_writer = writer_cfg.get("model_b")
+            if model_b_writer:
+                writer_gpt = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "writer_gpt", "primary")
+                writer_claude = self._create_agent_with_model(AgentRole.WRITER, WRITER_PROMPT, "writer_claude", model_b_writer)
+            else:
+                writer_gpt = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "writer_gpt", "openai")
+                writer_claude = self._create_agent(AgentRole.WRITER, WRITER_PROMPT, "writer_claude", "anthropic")
 
             await self.event_bus.publish(Event(
                 "node_started", "writer_gpt",
@@ -781,9 +1160,13 @@ class CompetitiveAnalysisEngine:
                     "node_started", "arbiter_report",
                     {"role": "arbiter", "task": "仲裁融合报告"},
                 ))
+                # Use system_prompt_b from config if available, otherwise default
+                arbiter_cfg = self._config_snapshot.get("arbiter", {}) if hasattr(self, "_config_snapshot") else {}
+                report_prompt = arbiter_cfg.get("system_prompt_b") or ARBITER_REPORT_PROMPT
+
                 report_arbiter = ArbiterAgent(
                     provider=self.anthropic_provider,
-                    system_prompt=ARBITER_REPORT_PROMPT,
+                    system_prompt=report_prompt,
                     event_bus=self.event_bus,
                     node_id="arbiter_report",
                 )
@@ -805,13 +1188,20 @@ class CompetitiveAnalysisEngine:
                 if not draft_report.strip():
                     logger.warning("Arbiter report returned empty, using longer individual report as fallback")
                     draft_report = gpt_report_text if len(gpt_report_text) >= len(claude_report_text) else claude_report_text
+                # Extract decision summary from arbiter output
+                arbiter_report_summary = self._extract_decision_summary(
+                    draft_report,
+                    fallback=f"融合两份报告，生成最终竞品分析报告（{len(draft_report)} 字）"
+                )
+                # Strip the summary line from the actual report
+                draft_report = self._strip_decision_summary(draft_report)
                 # Publish trace for arbiter
                 await self.event_bus.publish(Event(
                     "node_trace", "arbiter_report",
                     {
                         "role": "arbiter",
                         "label": "仲裁官(报告)",
-                        "reasoning": draft_report[:500] if draft_report else "仲裁结果为空",
+                        "reasoning": arbiter_report_summary,
                         "tool_calls": [],
                         "input_tokens": arbiter_report_result.get("total_input_tokens", 0),
                         "output_tokens": arbiter_report_result.get("total_output_tokens", 0),

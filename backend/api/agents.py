@@ -32,7 +32,9 @@ class AgentConfigUpdate(BaseModel):
     """Request body for updating agent configuration."""
     display_name: Optional[str] = None
     model: Optional[str] = None
+    model_b: Optional[str] = None
     system_prompt: Optional[str] = None
+    system_prompt_b: Optional[str] = None
     token_budget: Optional[int] = None
     enabled_tools: Optional[list[str]] = None
 
@@ -103,6 +105,15 @@ async def update_agent(role: str, body: AgentConfigUpdate):
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid model. Must be one of: {valid_model_ids}",
+            )
+
+    # Validate model_b (can be None to disable cross-validation for this role)
+    if "model_b" in updates and updates["model_b"] is not None:
+        valid_model_ids = [m["id"] for m in AVAILABLE_MODELS]
+        if updates["model_b"] not in valid_model_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model_b. Must be one of: {valid_model_ids}",
             )
 
     # Validate token_budget

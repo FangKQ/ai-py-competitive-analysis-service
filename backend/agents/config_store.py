@@ -28,8 +28,7 @@ _DB_PATH = Path(__file__).resolve().parent.parent / "data" / "agent_configs.db"
 AVAILABLE_MODELS = [
     {"id": "gpt-5.5-2026-04-23", "name": "GPT-5.5", "provider": "openai", "description": "Most capable model for deep reasoning"},
     {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "provider": "openai", "description": "Fast and cost-efficient"},
-    {"id": "gpt-4.1", "name": "GPT-4.1", "provider": "openai", "description": "Balanced performance and speed"},
-    {"id": "claude-sonnet-4-20250514", "name": "Claude Sonnet 4", "provider": "anthropic", "description": "Strong reasoning and long-context understanding"},
+    {"id": "claude-opus-4-8", "name": "Claude Opus 4.8", "provider": "anthropic", "description": "Most capable Claude model for deep reasoning"},
 ]
 
 # Available tools in the system
@@ -48,42 +47,49 @@ DEFAULT_CONFIGS: dict[str, dict[str, Any]] = {
     "orchestrator": {
         "display_name": "编排器",
         "model": "gpt-4.1-mini",
+        "model_b": None,
         "token_budget": 8192,
         "enabled_tools": ["plan_analysis"],
     },
     "collector": {
         "display_name": "采集器",
         "model": "gpt-4.1-mini",
+        "model_b": None,
         "token_budget": 8192,
         "enabled_tools": ["web_search", "fetch_webpage"],
     },
     "analyst": {
         "display_name": "分析师",
         "model": "gpt-5.5-2026-04-23",
+        "model_b": "claude-opus-4-8",
         "token_budget": 16384,
         "enabled_tools": ["analyze_data", "web_search"],
     },
     "writer": {
         "display_name": "撰写者",
         "model": "gpt-5.5-2026-04-23",
+        "model_b": "claude-opus-4-8",
         "token_budget": 16384,
         "enabled_tools": ["generate_report_section"],
     },
     "reviewer": {
         "display_name": "审核员",
         "model": "gpt-4.1-mini",
+        "model_b": None,
         "token_budget": 8192,
         "enabled_tools": ["review_content", "web_search"],
     },
     "citation": {
         "display_name": "引用器",
         "model": "gpt-4.1-mini",
+        "model_b": None,
         "token_budget": 8192,
         "enabled_tools": ["verify_citation", "fetch_webpage"],
     },
     "arbiter": {
         "display_name": "仲裁官",
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-opus-4-8",
+        "model_b": None,
         "token_budget": 32768,
         "enabled_tools": [],
     },
@@ -113,6 +119,15 @@ def get_default_prompt(role: str) -> str:
     return prompt_map.get(role, "")
 
 
+def get_default_prompt_b(role: str) -> str:
+    """Get the default secondary prompt for roles that have two prompts (arbiter)."""
+    from agents.prompts import ARBITER_REPORT_PROMPT
+    prompt_b_map = {
+        "arbiter": ARBITER_REPORT_PROMPT,
+    }
+    return prompt_b_map.get(role, "")
+
+
 class AgentConfigStore:
     """SQLite-based agent configuration store."""
 
@@ -129,7 +144,9 @@ class AgentConfigStore:
                     role TEXT UNIQUE NOT NULL,
                     display_name TEXT NOT NULL,
                     model TEXT NOT NULL,
+                    model_b TEXT DEFAULT NULL,
                     system_prompt TEXT NOT NULL,
+                    system_prompt_b TEXT DEFAULT NULL,
                     token_budget INTEGER NOT NULL DEFAULT 8192,
                     enabled_tools TEXT NOT NULL DEFAULT '[]',
                     updated_at TEXT NOT NULL
@@ -144,18 +161,21 @@ class AgentConfigStore:
                 await self._seed_defaults(db)
 
     async def _seed_defaults(self, db: aiosqlite.Connection) -> None:
-        """Insert default configurations for all 6 roles."""
+        """Insert default configurations for all roles."""
         now = datetime.now().isoformat()
         for role, config in DEFAULT_CONFIGS.items():
             prompt = get_default_prompt(role)
+            prompt_b = get_default_prompt_b(role) or None
             await db.execute(
-                """INSERT INTO agent_configs (role, display_name, model, system_prompt, token_budget, enabled_tools, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO agent_configs (role, display_name, model, model_b, system_prompt, system_prompt_b, token_budget, enabled_tools, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     role,
                     config["display_name"],
                     config["model"],
+                    config.get("model_b"),
                     prompt,
+                    prompt_b,
                     config["token_budget"],
                     json.dumps(config["enabled_tools"]),
                     now,
@@ -197,7 +217,7 @@ class AgentConfigStore:
         try:
             async with aiosqlite.connect(self.db_path) as db:
                 # Build SET clause dynamically
-                allowed_fields = {"display_name", "model", "system_prompt", "token_budget", "enabled_tools"}
+                allowed_fields = {"display_name", "model", "model_b", "system_prompt", "system_prompt_b", "token_budget", "enabled_tools"}
                 set_parts = []
                 values = []
                 for field, value in updates.items():
@@ -231,10 +251,13 @@ class AgentConfigStore:
             return None
 
         prompt = get_default_prompt(role)
+        prompt_b = get_default_prompt_b(role) or None
         updates = {
             "display_name": config["display_name"],
             "model": config["model"],
+            "model_b": config.get("model_b"),
             "system_prompt": prompt,
+            "system_prompt_b": prompt_b,
             "token_budget": config["token_budget"],
             "enabled_tools": config["enabled_tools"],
         }
@@ -259,6 +282,7 @@ class AgentConfigStore:
                 "role": role,
                 "display_name": config["display_name"],
                 "model": config["model"],
+                "model_b": config.get("model_b"),
                 "system_prompt": get_default_prompt(role),
                 "token_budget": config["token_budget"],
                 "enabled_tools": config["enabled_tools"],
@@ -276,6 +300,7 @@ class AgentConfigStore:
             "role": role,
             "display_name": config["display_name"],
             "model": config["model"],
+            "model_b": config.get("model_b"),
             "system_prompt": get_default_prompt(role),
             "token_budget": config["token_budget"],
             "enabled_tools": config["enabled_tools"],

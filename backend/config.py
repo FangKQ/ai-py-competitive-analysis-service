@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     # Anthropic (Claude)
     anthropic_api_key: str = Field(default="", env="ANTHROPIC_API_KEY")
-    anthropic_model: str = Field(default="claude-sonnet-4-20250514", env="ANTHROPIC_MODEL")
+    anthropic_model: str = Field(default="claude-opus-4-8", env="ANTHROPIC_MODEL")
 
     # Multi-model strategy
     cross_validation_enabled: bool = Field(
@@ -33,6 +33,10 @@ class Settings(BaseSettings):
 
     # Tavily Search API
     tavily_api_key: str = Field(default="", env="TAVILY_API_KEY")
+
+    # Dev mode: limit search to save API quota
+    dev_max_search_results: int = Field(default=5, env="DEV_MAX_SEARCH_RESULTS")
+    dev_max_search_calls: int = Field(default=10, env="DEV_MAX_SEARCH_CALLS")
 
     database_url: str = Field(
         default="sqlite+aiosqlite:///./data/competitive_analysis.db",

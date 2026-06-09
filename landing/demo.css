@@ -156,11 +156,15 @@ code, pre { font-family: var(--mono); }
 }
 .nav-back {
   font-size: .82rem;
-  color: var(--fg3);
-  transition: color .2s;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 4px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  transition: background .2s, color .2s;
   white-space: nowrap;
 }
-.nav-back:hover { color: var(--accent); }
+.nav-back:hover { background: var(--accent); color: #fff; }
 .theme-btn {
   font-size: 1.1rem;
   padding: 4px 8px;
@@ -753,7 +757,7 @@ code, pre { font-family: var(--mono); }
     padding: 6px 10px;
     font-size: .78rem;
   }
-  .nav-back { display: none; }
+  .nav-back { font-size: .75rem; }
   .tab-icon { display: none; }
   .tr-item {
     grid-template-columns: 100px 1fr 60px;

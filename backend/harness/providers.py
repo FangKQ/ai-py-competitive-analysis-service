@@ -216,7 +216,7 @@ class AnthropicProvider:
         max_tokens: int = 8192,
     ) -> ProviderResponse:
         """
-        Send chat request via Anthropic API.
+        Send chat request via Anthropic API using streaming to avoid timeout.
 
         :param system_prompt: system-level instruction
         :param messages: conversation messages
@@ -247,34 +247,67 @@ class AnthropicProvider:
                     })
                 kwargs["tools"] = anthropic_tools
 
-            response = await self.client.messages.create(**kwargs)
-
-            # Parse response
+            # Use streaming to avoid 10-minute timeout on long requests
             content = ""
             tool_calls = []
-            for block in response.content:
-                if block.type == "text":
-                    content += block.text
-                elif block.type == "tool_use":
-                    tool_calls.append({
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.input,
-                    })
+            input_tokens = 0
+            output_tokens = 0
+            stop_reason = "end_turn"
+
+            # Track tool_use blocks being built incrementally
+            current_tool: dict[str, Any] | None = None
+            current_tool_json = ""
+
+            async with self.client.messages.stream(**kwargs) as stream:
+                async for event in stream:
+                    if event.type == "message_start":
+                        if hasattr(event, "message") and hasattr(event.message, "usage"):
+                            input_tokens = event.message.usage.input_tokens
+                    elif event.type == "message_delta":
+                        if hasattr(event, "usage") and event.usage:
+                            output_tokens = event.usage.output_tokens
+                        if hasattr(event, "delta") and hasattr(event.delta, "stop_reason"):
+                            stop_reason = event.delta.stop_reason or stop_reason
+                    elif event.type == "content_block_start":
+                        if hasattr(event, "content_block"):
+                            block = event.content_block
+                            if block.type == "tool_use":
+                                current_tool = {
+                                    "id": block.id,
+                                    "name": block.name,
+                                    "input": {},
+                                }
+                                current_tool_json = ""
+                    elif event.type == "content_block_delta":
+                        if hasattr(event, "delta"):
+                            delta = event.delta
+                            if delta.type == "text_delta":
+                                content += delta.text
+                            elif delta.type == "input_json_delta":
+                                current_tool_json += delta.partial_json
+                    elif event.type == "content_block_stop":
+                        if current_tool is not None:
+                            try:
+                                current_tool["input"] = json.loads(current_tool_json) if current_tool_json else {}
+                            except json.JSONDecodeError:
+                                current_tool["input"] = {}
+                            tool_calls.append(current_tool)
+                            current_tool = None
+                            current_tool_json = ""
 
             finish_reason = "stop"
-            if response.stop_reason == "tool_use":
+            if stop_reason == "tool_use":
                 finish_reason = "tool_use"
-            elif response.stop_reason == "end_turn":
+            elif stop_reason == "end_turn":
                 finish_reason = "stop"
 
             return ProviderResponse(
                 content=content,
                 tool_calls=tool_calls,
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 finish_reason=finish_reason,
-                raw_response=response,
+                raw_response=None,
             )
 
         except Exception as e:
