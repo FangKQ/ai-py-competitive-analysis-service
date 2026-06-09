@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useRef, useEffect } from "react";
 import ReactFlow, {
   Node,
   Edge,
@@ -9,6 +9,8 @@ import ReactFlow, {
   BackgroundVariant,
   Position,
   Handle,
+  useReactFlow,
+  ReactFlowProvider,
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { Brain, Search, BarChart3, PenTool, ShieldCheck, Link2 } from "lucide-react";
@@ -56,7 +58,7 @@ function AgentNode({ data }: { data: { label: string; role: string; status: Node
 
   return (
     <div
-      className={`relative px-4 py-3 rounded-xl border-2 min-w-[140px] transition-all duration-300 ${statusStyles[data.status]}`}
+      className={`relative px-3 py-2.5 rounded-xl border-2 max-w-[160px] transition-all duration-300 ${statusStyles[data.status]}`}
       style={{
         borderColor: data.status === "running" ? config.color : undefined,
         boxShadow: data.status === "running" ? `0 0 20px ${config.color}33` : undefined,
@@ -65,13 +67,13 @@ function AgentNode({ data }: { data: { label: string; role: string; status: Node
       <Handle type="target" position={Position.Left} className="!bg-surface-500 !border-surface-400 !w-2 !h-2" />
       <Handle type="source" position={Position.Right} className="!bg-surface-500 !border-surface-400 !w-2 !h-2" />
       <div className="flex items-center gap-2">
-        <div className="p-1.5 rounded-lg" style={{ backgroundColor: `${config.color}20` }}>
-          <Icon className="w-4 h-4" style={{ color: config.color }} />
+        <div className="p-1 rounded-lg flex-shrink-0" style={{ backgroundColor: `${config.color}20` }}>
+          <Icon className="w-3.5 h-3.5" style={{ color: config.color }} />
         </div>
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-1.5">
-            <span className="font-medium text-xs text-surface-100">{data.label}</span>
-            <span className={`w-1.5 h-1.5 rounded-full ${statusDot[data.status]}`} />
+            <span className="font-medium text-xs text-surface-100 truncate">{data.label}</span>
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusDot[data.status]}`} />
           </div>
         </div>
       </div>
@@ -97,8 +99,8 @@ export default function DAGView({ nodes }: DAGViewProps) {
     // Detect cross-validation mode by checking for arbiter nodes
     const hasArbiter = nodes.some((n) => n.role === "arbiter");
 
-    const colWidth = 220;
-    const rowHeight = 70;
+    const colWidth = 190;
+    const rowHeight = 60;
     const collectorStartY = Math.max(0, (collectors.length - 1) * rowHeight * 0.5);
 
     const fNodes: Node[] = [];
@@ -311,12 +313,39 @@ export default function DAGView({ nodes }: DAGViewProps) {
   }
 
   return (
-    <div className="h-full w-full absolute inset-0">
+    <ReactFlowProvider>
+      <DAGFlowInner flowNodes={flowNodes} flowEdges={flowEdges} />
+    </ReactFlowProvider>
+  );
+}
+
+function DAGFlowInner({ flowNodes, flowEdges }: { flowNodes: Node[]; flowEdges: Edge[] }) {
+  const { fitView } = useReactFlow();
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-fit when container resizes (e.g. drag handle)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      // Small delay to let ReactFlow recalculate
+      setTimeout(() => fitView({ padding: 0.3, maxZoom: 0.85 }), 50);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fitView]);
+
+  // Also refit when nodes change
+  useEffect(() => {
+    setTimeout(() => fitView({ padding: 0.3, maxZoom: 0.85 }), 100);
+  }, [flowNodes, fitView]);
+
+  return (
+    <div ref={containerRef} className="h-full w-full absolute inset-0">
       <ReactFlow
         nodes={flowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}
-        onInit={onInit}
         fitView
         fitViewOptions={{ padding: 0.3, maxZoom: 0.85 }}
         minZoom={0.3}
@@ -325,7 +354,7 @@ export default function DAGView({ nodes }: DAGViewProps) {
         className="bg-surface-900"
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#334155" />
-        <Controls className="!bg-surface-800 !border-surface-700 !shadow-xl [&>button]:!bg-surface-800 [&>button]:!border-surface-700 [&>button]:!text-surface-300 [&>button:hover]:!bg-surface-700" />
+        <Controls showInteractive={false} className="!bg-surface-800 !border-surface-700 !shadow-xl [&>button]:!bg-surface-800 [&>button]:!border-surface-700 [&>button]:!text-surface-300 [&>button:hover]:!bg-surface-700" />
       </ReactFlow>
 
       <div className="absolute top-2 left-2 flex items-center gap-3 px-3 py-1.5 bg-surface-800/90 backdrop-blur-sm rounded-lg border border-surface-700 z-10">

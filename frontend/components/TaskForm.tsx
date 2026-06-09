@@ -170,9 +170,12 @@ export default function TaskForm({ onSubmit }: TaskFormProps) {
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-surface-200 mb-3">
+        <label className="block text-sm font-medium text-surface-200 mb-2">
           关注维度
         </label>
+        <p className="text-xs text-surface-500 mb-3">
+          选中的维度将作为报告重点分析方向，不选则全面覆盖
+        </p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {FOCUS_AREAS.map((area) => (
             <button

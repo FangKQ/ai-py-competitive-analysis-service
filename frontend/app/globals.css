@@ -132,6 +132,44 @@ select {
   animation: fade-in 0.4s ease-out forwards;
 }
 
+/* Timeline animations */
+@keyframes timeline-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  75%, 100% {
+    transform: scale(1.8);
+    opacity: 0;
+  }
+}
+
+.animate-timeline-ping {
+  animation: timeline-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes timeline-flow {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(500%);
+  }
+}
+
+.animate-timeline-flow {
+  animation: timeline-flow 2.4s ease-in-out infinite;
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 4s linear infinite;
+}
+
 /* scrollbar-thin utility - extra thin variant */
 .scrollbar-thin::-webkit-scrollbar {
   width: 4px;

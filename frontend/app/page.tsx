@@ -7,6 +7,7 @@ import TaskForm from "@/components/TaskForm";
 import DAGView from "@/components/DAGView";
 import TracePanel from "@/components/TracePanel";
 import ReportView from "@/components/ReportView";
+import InlineDemo from "@/components/InlineDemo";
 import { createTask, streamEvents } from "@/lib/api";
 import {
   Sparkles,
@@ -51,6 +52,27 @@ export default function HomePage() {
   const [report, setReport] = useState<string | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportReady, setReportReady] = useState(false);
+  const [dagHeight, setDagHeight] = useState(260);
+
+  // DAG panel resize drag
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startY: e.clientY, startH: dagHeight };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const delta = ev.clientY - dragRef.current.startY;
+      const newH = Math.max(120, Math.min(600, dragRef.current.startH + delta));
+      setDagHeight(newH);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [dagHeight]);
 
   // Auto-open task creation form if ?action=create
   useEffect(() => {
@@ -59,9 +81,196 @@ export default function HomePage() {
     }
   }, [searchParams]);
 
+  // Resume running task on mount — check if backend has an active task
+  const resumeAttempted = useRef(false);
+  const [runningTaskHint, setRunningTaskHint] = useState<{ id: string; query: string } | null>(null);
+
+  useEffect(() => {
+    if (resumeAttempted.current) return;
+    if (appState !== "idle") return;
+    if (searchParams.get("action")) return;
+
+    resumeAttempted.current = true;
+
+    fetch(`${API_BASE}/api/tasks`)
+      .then((res) => res.json())
+      .then((data) => {
+        const tasks = data.tasks || [];
+        const runningTask = tasks.find((t: { status: string }) => t.status === "running");
+        if (runningTask) {
+          setRunningTaskHint({ id: runningTask.task_id, query: runningTask.query });
+        }
+      })
+      .catch(() => {});
+  }, [appState, searchParams]);
+
   const handleStartAnalysis = () => {
     setAppState("creating");
   };
+
+  // Reusable SSE connection function
+  const connectSSE = useCallback((tid: string) => {
+    const eventSource = streamEvents(tid);
+
+    eventSource.onmessage = (event) => {
+      const payload = JSON.parse(event.data);
+
+      // DAG plan received - render full dynamic DAG
+      if (payload.type === "dag_plan") {
+        const nodes: DAGNodeInfo[] = (payload.data?.nodes || []).map(
+          (n: { id: string; role: string; label: string }) => ({
+            ...n,
+            status: n.id === "orchestrate" ? "completed" : "idle",
+          })
+        );
+        setDagNodes(nodes);
+      }
+
+      // Node started
+      if (payload.type === "node_started") {
+        setDagNodes((prev) =>
+          prev.map((n) =>
+            n.id === payload.source ? { ...n, status: "running" } : n
+          )
+        );
+      }
+
+      // Node completed
+      if (payload.type === "node_completed") {
+        setDagNodes((prev) =>
+          prev.map((n) =>
+            n.id === payload.source ? { ...n, status: "completed" } : n
+          )
+        );
+      }
+
+      // Node failed
+      if (payload.type === "node_failed") {
+        setDagNodes((prev) =>
+          prev.map((n) =>
+            n.id === payload.source ? { ...n, status: "error" } : n
+          )
+        );
+      }
+
+      // Node trace
+      if (payload.type === "node_trace") {
+        const d = payload.data || {};
+        const nodeId = payload.source;
+        setTraces((prev) => {
+          const existingIdx = prev.findIndex((t) => t.nodeId === nodeId);
+          if (existingIdx >= 0) {
+            const updated = [...prev];
+            const existing = updated[existingIdx];
+            updated[existingIdx] = {
+              ...existing,
+              label: d.label || existing.label,
+              action: d.label || existing.action,
+              reasoning: d.reasoning || existing.reasoning,
+              toolCalls: d.tool_calls ?? existing.toolCalls,
+              tokens: (d.input_tokens || 0) + (d.output_tokens || 0),
+              duration: d.duration_ms || 0,
+            };
+            return updated;
+          }
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              nodeId,
+              label: d.label || nodeId,
+              role: d.role || "",
+              action: d.label || "执行完成",
+              reasoning: d.reasoning || "",
+              toolCalls: d.tool_calls || [],
+              tokens: (d.input_tokens || 0) + (d.output_tokens || 0),
+              duration: d.duration_ms || 0,
+              timestamp: payload.timestamp || new Date().toISOString(),
+            },
+          ];
+        });
+      }
+
+      // Real-time tool call
+      if (payload.type === "tool_call") {
+        const d = payload.data || {};
+        const nodeId = payload.source;
+        const role = d.role || "";
+        setDagNodes((currentDagNodes) => {
+          const dagNode = currentDagNodes.find((n) => n.id === nodeId);
+          const nodeRole = dagNode?.role || role;
+          if (nodeRole && !["collector", "orchestrator", "citation"].includes(nodeRole)) {
+            return currentDagNodes;
+          }
+          const toolEntry = {
+            tool: d.tool || "unknown",
+            input: d.input || "",
+            output_summary: d.output_summary || "",
+            status: d.status || "success",
+          };
+          setTraces((prev) => {
+            const existingIdx = prev.findIndex((t) => t.nodeId === nodeId);
+            if (existingIdx >= 0) {
+              const updated = [...prev];
+              updated[existingIdx] = {
+                ...updated[existingIdx],
+                toolCalls: [...updated[existingIdx].toolCalls, toolEntry],
+              };
+              return updated;
+            }
+            const label = dagNode?.label || nodeId;
+            return [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                nodeId,
+                label,
+                role: d.role || "",
+                action: "采集中...",
+                reasoning: "",
+                toolCalls: [toolEntry],
+                tokens: 0,
+                duration: 0,
+                timestamp: payload.timestamp || new Date().toISOString(),
+              },
+            ];
+          });
+          return currentDagNodes;
+        });
+      }
+
+      // Done
+      if (payload.type === "done") {
+        fetch(`${API_BASE}/api/tasks/${tid}/report`)
+          .then((res) => res.json())
+          .then((data) => {
+            setReport(data.markdown_report || data.executive_summary || "");
+            setAppState("completed");
+            setReportReady(true);
+            requestAnimationFrame(() => {
+              setTimeout(() => setReportOpen(true), 50);
+            });
+          })
+          .catch(() => setAppState("completed"));
+        eventSource.close();
+      }
+    };
+
+    eventSource.onerror = () => {
+      eventSource.close();
+    };
+  }, []);
+
+  const handleResumeTask = useCallback(() => {
+    if (!runningTaskHint) return;
+    setTaskId(runningTaskHint.id);
+    setAppState("running");
+    setDagNodes([
+      { id: "orchestrate", role: "orchestrator", label: "编排器", status: "running" },
+    ]);
+    setRunningTaskHint(null);
+    connectSSE(runningTaskHint.id);
+  }, [runningTaskHint, connectSSE]);
 
   const handleSubmitTask = useCallback(
     async (data: {
@@ -82,156 +291,12 @@ export default function HomePage() {
           { id: "orchestrate", role: "orchestrator", label: "编排器", status: "running" },
         ]);
 
-        const eventSource = streamEvents(task.id);
-
-        eventSource.onmessage = (event) => {
-          const payload = JSON.parse(event.data);
-
-          // DAG plan received - render full dynamic DAG
-          if (payload.type === "dag_plan") {
-            const nodes: DAGNodeInfo[] = (payload.data?.nodes || []).map(
-              (n: { id: string; role: string; label: string }) => ({
-                ...n,
-                status: n.id === "orchestrate" ? "completed" : "idle",
-              })
-            );
-            setDagNodes(nodes);
-          }
-
-          // Node started
-          if (payload.type === "node_started") {
-            setDagNodes((prev) =>
-              prev.map((n) =>
-                n.id === payload.source ? { ...n, status: "running" } : n
-              )
-            );
-          }
-
-          // Node completed
-          if (payload.type === "node_completed") {
-            setDagNodes((prev) =>
-              prev.map((n) =>
-                n.id === payload.source ? { ...n, status: "completed" } : n
-              )
-            );
-          }
-
-          // Node failed
-          if (payload.type === "node_failed") {
-            setDagNodes((prev) =>
-              prev.map((n) =>
-                n.id === payload.source ? { ...n, status: "error" } : n
-              )
-            );
-          }
-
-          // Node trace - enrich existing trace with final info (reasoning, tokens, duration)
-          if (payload.type === "node_trace") {
-            const d = payload.data || {};
-            const nodeId = payload.source;
-            setTraces((prev) => {
-              const existingIdx = prev.findIndex((t) => t.nodeId === nodeId);
-              if (existingIdx >= 0) {
-                // Enrich existing entry with final data
-                const updated = [...prev];
-                const existing = updated[existingIdx];
-                updated[existingIdx] = {
-                  ...existing,
-                  label: d.label || existing.label,
-                  action: d.label || existing.action,
-                  reasoning: d.reasoning || existing.reasoning,
-                  toolCalls: (d.tool_calls && d.tool_calls.length > 0) ? d.tool_calls : existing.toolCalls,
-                  tokens: (d.input_tokens || 0) + (d.output_tokens || 0),
-                  duration: d.duration_ms || 0,
-                };
-                return updated;
-              }
-              // No existing entry — create new (for agents without tool calls)
-              return [
-                ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  nodeId,
-                  label: d.label || nodeId,
-                  role: d.role || "",
-                  action: d.label || "执行完成",
-                  reasoning: d.reasoning || "",
-                  toolCalls: d.tool_calls || [],
-                  tokens: (d.input_tokens || 0) + (d.output_tokens || 0),
-                  duration: d.duration_ms || 0,
-                  timestamp: payload.timestamp || new Date().toISOString(),
-                },
-              ];
-            });
-          }
-
-          // Real-time tool call — append to matching trace or create temp entry
-          if (payload.type === "tool_call") {
-            const d = payload.data || {};
-            const nodeId = payload.source; // Now uses node_id thanks to backend fix
-            const toolEntry = {
-              tool: d.tool || "unknown",
-              input: d.input || "",
-              output_summary: d.output_summary || "",
-              status: d.status || "success",
-            };
-            setTraces((prev) => {
-              const existingIdx = prev.findIndex((t) => t.nodeId === nodeId);
-              if (existingIdx >= 0) {
-                const updated = [...prev];
-                updated[existingIdx] = {
-                  ...updated[existingIdx],
-                  toolCalls: [...updated[existingIdx].toolCalls, toolEntry],
-                };
-                return updated;
-              }
-              // Find label from dagNodes
-              const dagNode = dagNodes.find((n) => n.id === nodeId);
-              const label = dagNode?.label || nodeId;
-              return [
-                ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  nodeId,
-                  label,
-                  role: d.role || "",
-                  action: "采集中...",
-                  reasoning: "",
-                  toolCalls: [toolEntry],
-                  tokens: 0,
-                  duration: 0,
-                  timestamp: payload.timestamp || new Date().toISOString(),
-                },
-              ];
-            });
-          }
-
-          // Done
-          if (payload.type === "done") {
-            fetch(`${API_BASE}/api/tasks/${task.id}/report`)
-              .then((res) => res.json())
-              .then((data) => {
-                setReport(data.markdown_report || data.executive_summary || "");
-                setAppState("completed");
-                setReportReady(true);
-                // Delay open so DOM renders first, then transition plays
-                requestAnimationFrame(() => {
-                  setTimeout(() => setReportOpen(true), 50);
-                });
-              })
-              .catch(() => setAppState("completed"));
-            eventSource.close();
-          }
-        };
-
-        eventSource.onerror = () => {
-          eventSource.close();
-        };
+        connectSSE(task.id);
       } catch (error) {
         console.error("Task creation failed:", error);
       }
     },
-    [dagNodes]
+    [connectSSE]
   );
 
   const handleDemoRun = useCallback(() => {
@@ -311,22 +376,44 @@ export default function HomePage() {
     }, 17000);
   }, []);
 
-  // Auto-trigger demo mode if ?action=demo (one-shot, clears URL immediately)
+  // Auto-trigger demo mode if ?action=demo (scroll to demo section)
   const demoTriggered = useRef(false);
   useEffect(() => {
     if (searchParams.get("action") === "demo" && !demoTriggered.current && appState === "idle") {
       demoTriggered.current = true;
       router.replace("/", { scroll: false });
-      handleDemoRun();
+      setTimeout(() => {
+        const el = document.getElementById("demo-section");
+        if (el) el.scrollIntoView({ behavior: "smooth" });
+      }, 100);
     }
-  }, [searchParams, handleDemoRun, appState, router]);
+  }, [searchParams, appState, router]);
 
   return (
     <div className={`h-screen flex flex-col ${appState === "running" || appState === "completed" ? "overflow-hidden" : "overflow-y-auto"}`}>
       <Header />
 
       {appState === "idle" && (
-        <main className="flex-1 flex flex-col items-center justify-center px-6">
+        <main className="px-6 pt-20 pb-12">
+          {/* Running task hint banner */}
+          {runningTaskHint && (
+            <div className="w-full max-w-3xl mx-auto mb-6 animate-fade-in">
+              <button
+                onClick={handleResumeTask}
+                className="w-full flex items-center gap-3 px-5 py-3 bg-blue-500/10 border border-blue-500/30 rounded-xl text-left hover:bg-blue-500/15 transition-colors group"
+              >
+                <div className="w-2.5 h-2.5 rounded-full bg-blue-400 animate-pulse flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-blue-300">有一个任务正在执行中</p>
+                  <p className="text-xs text-surface-400 truncate mt-0.5">{runningTaskHint.query}</p>
+                </div>
+                <span className="text-xs text-blue-400 group-hover:text-blue-300 flex-shrink-0">
+                  点击恢复 →
+                </span>
+              </button>
+            </div>
+          )}
+
           <div className="max-w-3xl mx-auto text-center animate-fade-in">
             <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary-500/10 border border-primary-500/20 text-primary-300 text-sm mb-8">
               <Sparkles className="w-4 h-4" />
@@ -351,11 +438,14 @@ export default function HomePage() {
                 <ArrowRight className="w-5 h-5" />
               </button>
               <button
-                onClick={handleDemoRun}
+                onClick={() => {
+                  const el = document.getElementById("demo-section");
+                  if (el) el.scrollIntoView({ behavior: "smooth" });
+                }}
                 className="inline-flex items-center gap-2 px-8 py-4 bg-surface-800 hover:bg-surface-700 text-surface-200 font-semibold rounded-xl border border-surface-700 transition-all duration-200"
               >
                 <Activity className="w-5 h-5" />
-                演示模式
+                查看演示
               </button>
             </div>
 
@@ -372,6 +462,17 @@ export default function HomePage() {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Demo section - inline DAG + Trace preview */}
+          <div id="demo-section" className="w-full max-w-6xl mx-auto mt-32 mb-16 scroll-mt-20 px-4">
+            {/* Section header */}
+            <div className="text-center mb-10">
+              <p className="text-xs font-medium tracking-widest text-primary-400 uppercase mb-3">Live Preview</p>
+              <h2 className="text-2xl font-bold text-surface-100">看看它是如何工作的</h2>
+              <p className="text-surface-400 text-sm mt-2">从需求解析到战略报告，全链路 Agent 协作自动完成</p>
+            </div>
+            <InlineDemo />
           </div>
         </main>
       )}
@@ -390,10 +491,18 @@ export default function HomePage() {
 
       {(appState === "running" || appState === "completed") && (
         <main className="flex-1 flex flex-col overflow-hidden">
-          {/* DAG area - frozen at top */}
-          <section className="relative flex-shrink-0 border-b border-surface-700" style={{ height: "280px" }}>
+          {/* DAG area - resizable */}
+          <section className="relative flex-shrink-0 border-b border-surface-700" style={{ height: `${dagHeight}px` }}>
             <DAGView nodes={dagNodes} />
           </section>
+
+          {/* Resize handle */}
+          <div
+            className="flex-shrink-0 h-2 cursor-row-resize bg-surface-800 hover:bg-primary-500/20 border-b border-surface-700 transition-colors flex items-center justify-center group"
+            onMouseDown={handleDragStart}
+          >
+            <div className="w-10 h-0.5 rounded bg-surface-600 group-hover:bg-primary-400 transition-colors" />
+          </div>
 
           {/* Trace area - scrollable within remaining space */}
           <section className="flex-1 overflow-y-auto scrollbar-thin">

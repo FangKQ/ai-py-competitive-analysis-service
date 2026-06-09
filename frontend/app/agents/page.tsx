@@ -24,19 +24,15 @@ interface AgentConfig {
   role: string;
   display_name: string;
   model: string;
+  model_b: string | null;
   system_prompt: string;
+  system_prompt_b: string | null;
   token_budget: number;
   enabled_tools: string[];
   updated_at: string;
 }
 
 interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-}
-
-interface ToolOption {
   id: string;
   name: string;
   description: string;
@@ -79,7 +75,6 @@ const ROLE_ICONS: Record<string, typeof Bot> = {
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [models, setModels] = useState<ModelOption[]>([]);
-  const [tools, setTools] = useState<ToolOption[]>([]);
   const [selectedRole, setSelectedRole] = useState<string>("orchestrator");
   const [editForm, setEditForm] = useState<Partial<AgentConfig>>({});
   const [saving, setSaving] = useState(false);
@@ -95,12 +90,10 @@ export default function AgentsPage() {
     Promise.all([
       fetch(`${API_BASE}/api/agents`).then((r) => r.json()),
       fetch(`${API_BASE}/api/agents/models`).then((r) => r.json()),
-      fetch(`${API_BASE}/api/agents/tools`).then((r) => r.json()),
     ])
-      .then(([agentsData, modelsData, toolsData]) => {
+      .then(([agentsData, modelsData]) => {
         setAgents(agentsData.agents || []);
         setModels(modelsData.models || []);
-        setTools(toolsData.tools || []);
         setLoading(false);
       })
       .catch((err) => {
@@ -128,9 +121,10 @@ export default function AgentsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: editForm.model,
+          model_b: editForm.model_b,
           system_prompt: editForm.system_prompt,
+          system_prompt_b: editForm.system_prompt_b,
           token_budget: editForm.token_budget,
-          enabled_tools: editForm.enabled_tools,
         }),
       });
       if (!res.ok) {
@@ -182,7 +176,6 @@ export default function AgentsPage() {
           model: editForm.model,
           system_prompt: editForm.system_prompt,
           token_budget: editForm.token_budget,
-          enabled_tools: editForm.enabled_tools,
         }),
       });
       if (!res.ok) {
@@ -197,16 +190,6 @@ export default function AgentsPage() {
       setTesting(false);
     }
   }, [selectedRole, testMessage, editForm]);
-
-  const toggleTool = (toolId: string) => {
-    setEditForm((prev) => {
-      const current = prev.enabled_tools || [];
-      const next = current.includes(toolId)
-        ? current.filter((t) => t !== toolId)
-        : [...current, toolId];
-      return { ...prev, enabled_tools: next };
-    });
-  };
 
   if (loading) {
     return (
@@ -310,7 +293,7 @@ export default function AgentsPage() {
             {/* Model selection */}
             <div>
               <label className="block text-sm font-medium text-surface-200 mb-2">
-                模型
+                模型{(selectedRole === "analyst" || selectedRole === "writer") ? " A（主模型）" : ""}
               </label>
               <select
                 value={editForm.model || ""}
@@ -324,6 +307,35 @@ export default function AgentsPage() {
                 ))}
               </select>
             </div>
+
+            {/* Model B selection - only for analyst and writer (cross-validation) */}
+            {(selectedRole === "analyst" || selectedRole === "writer") && (
+              <div>
+                <label className="block text-sm font-medium text-surface-200 mb-2">
+                  模型 B（交叉验证）
+                </label>
+                <select
+                  value={editForm.model_b || ""}
+                  onChange={(e) =>
+                    setEditForm((prev) => ({
+                      ...prev,
+                      model_b: e.target.value || null,
+                    }))
+                  }
+                  className="w-full px-4 py-2.5 bg-surface-800 border border-surface-700 rounded-lg text-surface-100 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 transition-all"
+                >
+                  <option value="">不启用（单模型模式）</option>
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} — {m.description}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-surface-500">
+                  启用后，该角色将使用两个模型并行执行，由仲裁官融合结果
+                </p>
+              </div>
+            )}
 
             {/* Token budget */}
             <div>
@@ -351,7 +363,7 @@ export default function AgentsPage() {
             {/* System prompt */}
             <div>
               <label className="block text-sm font-medium text-surface-200 mb-2">
-                System Prompt
+                {selectedRole === "arbiter" ? "分析仲裁 Prompt" : "System Prompt"}
               </label>
               <textarea
                 value={editForm.system_prompt || ""}
@@ -365,41 +377,25 @@ export default function AgentsPage() {
               </p>
             </div>
 
-            {/* Enabled tools */}
-            <div>
-              <label className="block text-sm font-medium text-surface-200 mb-3">
-                可用工具
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                {tools.map((tool) => {
-                  const isEnabled = (editForm.enabled_tools || []).includes(tool.id);
-                  return (
-                    <button
-                      key={tool.id}
-                      type="button"
-                      onClick={() => toggleTool(tool.id)}
-                      className={`flex items-start gap-3 px-3 py-2.5 rounded-lg text-sm border transition-all text-left ${
-                        isEnabled
-                          ? "bg-primary-500/10 border-primary-500/30 text-primary-300"
-                          : "bg-surface-800 border-surface-700 text-surface-400 hover:border-surface-600 hover:text-surface-300"
-                      }`}
-                    >
-                      <div
-                        className={`w-4 h-4 mt-0.5 rounded border flex-shrink-0 flex items-center justify-center ${
-                          isEnabled ? "bg-primary-500 border-primary-500" : "border-surface-600"
-                        }`}
-                      >
-                        {isEnabled && <Check className="w-3 h-3 text-white" />}
-                      </div>
-                      <div>
-                        <div className="font-medium">{tool.name}</div>
-                        <div className="text-xs opacity-70 mt-0.5">{tool.description}</div>
-                      </div>
-                    </button>
-                  );
-                })}
+            {/* System prompt B - only for arbiter (report arbitration) */}
+            {selectedRole === "arbiter" && (
+              <div>
+                <label className="block text-sm font-medium text-surface-200 mb-2">
+                  报告仲裁 Prompt
+                </label>
+                <textarea
+                  value={editForm.system_prompt_b || ""}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, system_prompt_b: e.target.value }))}
+                  rows={14}
+                  className="w-full px-4 py-3 bg-surface-800 border border-surface-700 rounded-lg text-surface-100 placeholder:text-surface-500 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500 resize-y font-mono text-sm leading-relaxed transition-all"
+                  style={{ minHeight: "200px" }}
+                />
+                <p className="mt-1 text-xs text-surface-500">
+                  {(editForm.system_prompt_b || "").length} / 20000 字符
+                  <span className="ml-2 text-surface-600">用于融合两份报告的仲裁阶段</span>
+                </p>
               </div>
-            </div>
+            )}
 
           </div>
           </div>
@@ -422,18 +418,6 @@ export default function AgentsPage() {
                   </span>
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-surface-800 border border-surface-700 text-surface-300">
                     Prompt: {(editForm.system_prompt || "").length} 字符
-                  </span>
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border ${
-                    (editForm.enabled_tools || []).length > 0
-                      ? "bg-primary-500/10 border-primary-500/30 text-primary-300"
-                      : "bg-yellow-500/10 border-yellow-500/30 text-yellow-300"
-                  }`}>
-                    工具: {(editForm.enabled_tools || []).length}/{tools.length}
-                    {(editForm.enabled_tools || []).length > 0 && (
-                      <span className="text-[10px] opacity-70 ml-1">
-                        ({(editForm.enabled_tools || []).map((t) => tools.find((tool) => tool.id === t)?.name || t).join(", ")})
-                      </span>
-                    )}
                   </span>
                 </div>
               </div>
@@ -526,7 +510,6 @@ export default function AgentsPage() {
                     <span>迭代: {testResult.iterations} 轮</span>
                     <span>Tokens: {testResult.input_tokens}↓ + {testResult.output_tokens}↑ = {testResult.tokens_used}</span>
                     <span>耗时: {(testResult.duration_ms / 1000).toFixed(1)}s</span>
-                    <span>工具: {testResult.config_used?.enabled_tools?.length || 0} 个可用</span>
                   </div>
                 </div>
               )}

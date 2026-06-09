@@ -3,7 +3,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { FileText, Download, ExternalLink, Copy, Check } from "lucide-react";
+import { FileText, Download, ExternalLink, Copy, Check, Loader2 } from "lucide-react";
 
 interface ReportViewProps {
   content: string | null;
@@ -12,6 +12,7 @@ interface ReportViewProps {
 
 export default function ReportView({ content, taskId }: ReportViewProps) {
   const [copiedFootnote, setCopiedFootnote] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   if (!content) {
     return (
@@ -31,20 +32,43 @@ export default function ReportView({ content, taskId }: ReportViewProps) {
     await navigator.clipboard.writeText(content);
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     if (!taskId) return;
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    window.open(`${apiBase}/api/tasks/${taskId}/export/pdf`, "_blank");
+    setExporting(true);
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const res = await fetch(`${apiBase}/api/tasks/${taskId}/export/pdf`);
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      // Extract filename from Content-Disposition header
+      const disposition = res.headers.get("Content-Disposition") || "";
+      let filename = "竞品分析报告.pdf";
+      const utf8Match = disposition.match(/filename\*=UTF-8''(.+)/);
+      if (utf8Match) {
+        filename = decodeURIComponent(utf8Match[1]);
+      } else {
+        const basicMatch = disposition.match(/filename="?([^"]+)"?/);
+        if (basicMatch) filename = decodeURIComponent(basicMatch[1]);
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("PDF export failed:", e);
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
     <div className="scrollbar-thin">
       <div className="max-w-4xl mx-auto p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-2">
-            <FileText className="w-5 h-5 text-primary-400" />
-            <h3 className="text-lg font-semibold">竞品分析报告</h3>
-          </div>
+        <div className="flex items-center justify-end mb-6">
           <div className="flex items-center gap-2">
             <button
               onClick={handleCopyReport}
@@ -55,11 +79,11 @@ export default function ReportView({ content, taskId }: ReportViewProps) {
             </button>
             <button
               onClick={handleExportPDF}
-              disabled={!taskId}
+              disabled={!taskId || exporting}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-surface-300 bg-surface-800 hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed border border-surface-700 rounded-lg transition-colors"
             >
-              <Download className="w-3.5 h-3.5" />
-              导出 PDF
+              {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+              {exporting ? "导出中..." : "导出 PDF"}
             </button>
           </div>
         </div>
